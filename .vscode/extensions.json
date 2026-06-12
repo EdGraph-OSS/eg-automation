@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "charliermarsh.ruff",
+        "ms-python.python",
+        "ms-python.debugpy",
+        "astral-sh.ty",
+        "tombi-toml.tombi"
+    ]
+}
