@@ -1,16 +1,9 @@
-[tool.uv.workspace]
-members = ["Core/Python", "NE-DataFlow"]
-
-[tool.uv]
-package = false
-# Reject packages published within the last 7 days. Blocks newly injected malicious
-# releases before they can be widely detected. Raise to "30 days" for higher-assurance
-# environments. To bypass for a specific urgent security patch:
-#   exclude-newer-package = { some-package = false }
-exclude-newer = "7 days"
-
 [dependency-groups]
-dev = ["ruff>=0.9", "ty>=0.0.0a1", "hatchling>=1.25"]
+dev = [
+  "hatchling>=1.25",
+  "ruff>=0.9",
+  "ty>=0.0.0a1",
+]
 
 [tool.ruff]
 line-length = 120
@@ -20,10 +13,15 @@ target-version = "py314"
 select = ["E", "F", "I", "N", "UP", "W"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["eg_core", "ne_data_flow"]
+known-first-party = ["eg_core"]
 
 [tool.ty.environment]
 python-version = "3.14"
-# Core/Python must be listed explicitly because ty does not follow the
-# editable-install .pth finder that uv generates for workspace members.
 extra-paths = ["Core/Python"]
+
+[tool.uv]
+package = false
+exclude-newer = "7 days"
+
+[tool.uv.workspace]
+members = ["Core/Python"]

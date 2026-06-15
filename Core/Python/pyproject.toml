@@ -3,7 +3,7 @@ name = "eg-core"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
-    "httpx>=0.27",
-    "pydantic>=2.0",
-    "tenacity>=9.0",
+  "edgraph-platform-client>=0.0.40",
+  "pydantic>=2.0",
+  "tenacity>=9.0",
 ]

@@ -1,8 +1,11 @@
+import json
 import logging
 import time
+import urllib.parse
 from dataclasses import dataclass
 
-import httpx
+import urllib3
+from urllib3.response import BaseHTTPResponse
 
 logger: logging.Logger = logging.getLogger(name=__name__)
 
@@ -31,6 +34,10 @@ class EdGraphTokenRetriever:
         self._client_id: str = client_id
         self._client_secret: str = client_secret
         self._token: _AccessToken | None = None
+        self._http = urllib3.PoolManager()
+
+    def close(self) -> None:
+        self._http.clear()
 
     def get(self) -> str:
         if self._token is None or self._token.soon_to_expire:
@@ -38,19 +45,29 @@ class EdGraphTokenRetriever:
         return self._token.value
 
     def _fetch(self) -> _AccessToken:
-        logger.info("Requesting access token from %s.", self._identity_url)
-        response: httpx.Response = httpx.post(
-            url=f"{self._identity_url}/connect/token",
-            data={
+        url = f"{self._identity_url}/connect/token"
+        logger.info("Requesting access token from %s.", url)
+
+        body: str = urllib.parse.urlencode(
+            query={
                 "grant_type": "client_credentials",
                 "client_id": self._client_id,
                 "client_secret": self._client_secret,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            }
         )
-        response.raise_for_status()
+        response: BaseHTTPResponse = self._http.request(
+            method="POST",
+            url=url,
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=urllib3.Timeout(connect=10, read=10),
+        )
 
-        payload: dict = response.json()
+        if response.status >= 400:
+            error_body = response.data.decode("utf-8", errors="replace")
+            raise ValueError(f"Token request failed with status {response.status}: {error_body}")
+
+        payload: dict = json.loads(response.data.decode(encoding="utf-8"))
         token: str | None = payload.get("access_token")
 
         if not token:

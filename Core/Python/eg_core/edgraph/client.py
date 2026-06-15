@@ -1,12 +1,24 @@
+import json
 import logging
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
+from edgraph_platform_client import ApiClient, Configuration
+from edgraph_platform_client.api import (
+    ConnectionsApi,
+    InstancesApi,
+    InstancesApplicationsApi,
+    InstancesClaimSetsApi,
+    InstancesVendorsApi,
+    JobsApi,
+)
+from edgraph_platform_client.api_response import ApiResponse
+from edgraph_platform_client.exceptions import ApiException
 from tenacity import (
     after_log,
     before_sleep_log,
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     stop_after_delay,
@@ -14,6 +26,7 @@ from tenacity import (
 )
 
 from .auth import EdGraphTokenRetriever
+from .config import ENVIRONMENT_URLS, ApiUrls, EdGraphEnvironment
 from .exceptions import (
     ApplicationNotFoundError,
     ClaimSetNotFoundError,
@@ -51,35 +64,50 @@ logger: logging.Logger = logging.getLogger(__name__)
 _PAGE_SIZE = 1000
 _OPERATIONAL_CONTEXT_URI = "uri://edgraph.com"
 
+_RETRY = retry(
+    stop=stop_after_attempt(max_attempt_number=3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception(lambda e: isinstance(e, ApiException) and getattr(e, "status", 0) >= 500),
+    reraise=True,
+)
 
-def _log_error_response(response: httpx.Response) -> None:
-    try:
-        body: str = response.text
-        if body:
-            logger.error("Response body: %s", body)
-    except Exception as exc:
-        logger.error("Error reading response body: %s", exc)
+
+def _json(api_resp: ApiResponse) -> dict:
+    return json.loads(api_resp.raw_data)
 
 
 class EdGraphClient:
-    """HTTP client scoped to a single EdGraph tenant.
+    """EdGraph Tenant API client scoped to a single tenant.
 
-    Wraps the EdGraph Tenant API (Ed-Fi Admin + Data Sync endpoints).
-    All HTTP methods use a shared httpx.Client that injects the Bearer token.
-    Transport-level errors are retried up to 3 times with exponential back-off.
+    Wraps the EdGraph Tenant API (Ed-Fi Admin + Data Sync endpoints) using the
+    official edgraph-platform-client SDK for HTTP transport. SDK API calls are
+    retried up to 3 times with exponential back-off on ApiException.
     """
 
-    def __init__(self, tenant_url: str, tenant_id: str, token_retriever: EdGraphTokenRetriever) -> None:
+    def __init__(
+        self,
+        environment: EdGraphEnvironment,
+        tenant_id: str,
+        client_id: str,
+        client_secret: str,
+    ) -> None:
+        urls: ApiUrls = ENVIRONMENT_URLS[environment]
         self._tenant_id: str = tenant_id
-        self._token_retriever = token_retriever
-        self._http = httpx.Client(
-            base_url=tenant_url,
-            headers={"Content-Type": "application/json"},
-            timeout=30.0,
-        )
+        self._retriever = EdGraphTokenRetriever(urls.identity, client_id, client_secret)
+
+        config = Configuration(host=urls.tenant)
+        config.refresh_api_key_hook = lambda c: setattr(c, "access_token", self._retriever.get())
+
+        self._api_client = ApiClient(configuration=config)
+        self._instances = InstancesApi(self._api_client)
+        self._instance_apps = InstancesApplicationsApi(self._api_client)
+        self._claimsets = InstancesClaimSetsApi(self._api_client)
+        self._vendors = InstancesVendorsApi(self._api_client)
+        self._connections = ConnectionsApi(self._api_client)
+        self._jobs = JobsApi(self._api_client)
 
     def close(self) -> None:
-        self._http.close()
+        self._retriever.close()
 
     def __enter__(self) -> EdGraphClient:
         return self
@@ -87,66 +115,22 @@ class EdGraphClient:
     def __exit__(self, *args: object) -> None:
         self.close()
 
-    def _path(self, relative: str) -> str:
-        return f"/tenants/{self._tenant_id}/{relative}"
-
-    @retry(
-        stop=stop_after_attempt(max_attempt_number=3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(exception_types=httpx.TransportError),
-        reraise=True,
-    )
-    def _get(self, path: str, params: dict | None = None) -> httpx.Response:
-        return self._http.get(
-            url=path,
-            params=params,
-            headers={"Authorization": f"Bearer {self._token_retriever.get()}"},
-        )
-
-    @retry(
-        stop=stop_after_attempt(max_attempt_number=3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(exception_types=httpx.TransportError),
-        reraise=True,
-    )
-    def _post(self, path: str, json: dict) -> httpx.Response:
-        return self._http.post(
-            url=path,
-            json=json,
-            headers={"Authorization": f"Bearer {self._token_retriever.get()}"},
-        )
-
-    @retry(
-        stop=stop_after_attempt(max_attempt_number=3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(exception_types=httpx.TransportError),
-        reraise=True,
-    )
-    def _put(self, path: str, json: dict | None = None) -> httpx.Response:
-        return self._http.put(
-            url=path,
-            json=json,
-            headers={"Authorization": f"Bearer {self._token_retriever.get()}"},
-        )
-
+    @_RETRY
     def get_edfi_connections(
         self,
         database_engine: str,
         connection_type: str = "EdGraphManagedHosted",
     ) -> PaginatedResponse[EdFiAdminConnection]:
-        params: dict[str, int | str] = {
-            "pageSize": _PAGE_SIZE,
-            "pageIndex": 0,
-            "filter": FilterBuilder(filter_str=f'databaseEngine == "{database_engine}"')
+        api_resp: ApiResponse[Any] = self._connections.get_ed_fi_connections_async_with_http_info(
+            tenant_id=self._tenant_id,
+            page_size=_PAGE_SIZE,
+            page_index=0,
+            filter=FilterBuilder(filter_str=f'databaseEngine == "{database_engine}"')
             .and_(filter_str=f'connectionType == "{connection_type}"')
             .build(),
-            "orderBy": "connectionName desc",
-        }
-        response: httpx.Response = self._get(self._path(relative="edfiadmin/connections"), params=params)
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        data: Any = response.json()
+            order_by="connectionName desc",
+        )
+        data = _json(api_resp)
         return PaginatedResponse[EdFiAdminConnection](
             page_index=data["pageIndex"],
             page_size=data["pageSize"],
@@ -154,12 +138,12 @@ class EdGraphClient:
             data=[EdFiAdminConnection(**item) for item in data["data"]],
         )
 
+    @_RETRY
     def get_ods_backup_codes(self) -> PaginatedResponse[OdsBackupCode]:
-        response: httpx.Response = self._get(self._path(relative="edfiadmin/connections/odsBackupCodes"))
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        data: Any = response.json()
+        api_resp: ApiResponse[Any] = self._connections.get_ed_fi_ods_backup_codes_descriptors_async_with_http_info(
+            tenant_id=self._tenant_id,
+        )
+        data = _json(api_resp)
         return PaginatedResponse[OdsBackupCode](
             page_index=data["pageIndex"],
             page_size=data["pageSize"],
@@ -167,29 +151,24 @@ class EdGraphClient:
             data=[OdsBackupCode(**item) for item in data["data"]],
         )
 
+    @_RETRY
     def create_edfi_instance(self, request: CreateEdFiAdminInstanceRequest) -> EdFiAdminInstanceCreatedResponse:
         logger.info("Creating Ed-Fi instance '%s'.", request.instance_name)
-        response: httpx.Response = self._post(
-            self._path(relative="edfiadmin/instances"),
-            json=request.model_dump(by_alias=True),
+        api_resp = self._instances.create_instance_async_with_http_info(
+            tenant_id=self._tenant_id,
+            edfi_admin_api_edfi_admin_v1_create_instance_request=request.model_dump(by_alias=True),
         )
-        if response.status_code != 201:
-            logger.error("Could not create Ed-Fi instance.")
-            _log_error_response(response)
-            response.raise_for_status()
-        return EdFiAdminInstanceCreatedResponse(**response.json())
+        return EdFiAdminInstanceCreatedResponse(**_json(api_resp))
 
+    @_RETRY
     def search_edfi_instances(self, instance_id: str) -> list[EdFiAdminInstance]:
-        params: dict[str, int | str] = {
-            "pageSize": 10,
-            "pageIndex": 0,
-            "filter": FilterBuilder(filter_str=f'id == "{instance_id}"').build(),
-        }
-        response: httpx.Response = self._get(self._path(relative="edfiadmin/instances"), params=params)
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        data: Any = response.json()
+        api_resp = self._instances.get_instances_async_with_http_info(
+            tenant_id=self._tenant_id,
+            page_size=10,
+            page_index=0,
+            filter=FilterBuilder(filter_str=f'id == "{instance_id}"').build(),
+        )
+        data = _json(api_resp)
         return [EdFiAdminInstance(**item) for item in data["data"]]
 
     @retry(
@@ -211,15 +190,15 @@ class EdGraphClient:
             raise InstanceNotProvisionedError(f"Instance '{instance_id}' is not yet provisioned.")
         return True
 
+    @_RETRY
     def get_edfi_instance_claimsets(self, instance_id: str) -> PaginatedResponse[EdFiAdminInstanceClaimSet]:
-        params: dict[str, int] = {"pageSize": 2000, "pageIndex": 0}
-        response: httpx.Response = self._get(
-            self._path(relative=f"edfiadmin/instances/{instance_id}/claimsets"), params=params
+        api_resp = self._claimsets.get_claim_sets_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            page_size=2000,
+            page_index=0,
         )
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        data: Any = response.json()
+        data = _json(api_resp)
         return PaginatedResponse[EdFiAdminInstanceClaimSet](
             page_index=data["pageIndex"],
             page_size=data["pageSize"],
@@ -240,20 +219,19 @@ class EdGraphClient:
             )
         return match
 
+    @_RETRY
     def create_edfi_instance_vendor(
         self, instance_id: str, request: CreateEdFiAdminVendorRequest
     ) -> EdFiAdminVendorCreatedResponse:
         logger.info("Creating vendor '%s' in instance '%s'.", request.vendor_name, instance_id)
-        response: httpx.Response = self._post(
-            self._path(relative=f"edfiadmin/instances/{instance_id}/vendors"),
-            json=request.model_dump(by_alias=True),
+        api_resp = self._vendors.create_vendor_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            edfi_admin_api_edfi_admin_v1_create_vendor_request=request.model_dump(by_alias=True),
         )
-        if response.status_code != 201:
-            logger.error("Could not create Ed-Fi vendor.")
-            _log_error_response(response)
-            response.raise_for_status()
-        return EdFiAdminVendorCreatedResponse(**response.json())
+        return EdFiAdminVendorCreatedResponse(**_json(api_resp))
 
+    @_RETRY
     def create_edfi_instance_application(
         self, instance_id: str, request: CreateEdFiAdminApplicationRequest
     ) -> EdFiAdminApplicationCreatedResponse:
@@ -262,30 +240,28 @@ class EdGraphClient:
             request.application_name,
             instance_id,
         )
-        response: httpx.Response = self._post(
-            self._path(relative=f"edfiadmin/instances/{instance_id}/applications"),
-            json=request.model_dump(by_alias=True),
+        api_resp: ApiResponse[Any] = self._instance_apps.create_application_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            edfi_admin_api_edfi_admin_v1_create_ed_fi_application_request=request.model_dump(by_alias=True),
         )
-        if response.status_code != 201:
-            logger.error("Could not create Ed-Fi application.")
-            _log_error_response(response)
-            response.raise_for_status()
-        return EdFiAdminApplicationCreatedResponse(**response.json())
+        return EdFiAdminApplicationCreatedResponse(**_json(api_resp))
 
+    @_RETRY
     def get_edfi_instance_application(self, instance_id: str, application_id: int) -> EdFiAdminInstanceApplication:
-        response: httpx.Response = self._get(
-            self._path(relative=f"edfiadmin/instances/{instance_id}/applications/{application_id}/apiClients")
+        api_resp: ApiResponse[Any] = self._instance_apps.get_application_api_clients_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            application_id=str(application_id),
         )
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        data: Any = response.json()
+        data = _json(api_resp)
         apps: list[EdFiAdminInstanceApplication] = [EdFiAdminInstanceApplication(**item) for item in data["data"]]
         match: EdFiAdminInstanceApplication | None = next((a for a in apps if a.application_id == application_id), None)
         if match is None:
             raise ApplicationNotFoundError(f"No API client found for application '{application_id}'.")
         return match
 
+    @_RETRY
     def regenerate_application_secret(
         self, instance_id: str, application_id: int, api_client_id: int
     ) -> EdFiAdminInstanceApplicationSecretRegeneratedResponse:
@@ -294,26 +270,24 @@ class EdGraphClient:
             api_client_id,
             application_id,
         )
-        response: httpx.Response = self._put(
-            self._path(
-                relative=f"edfiadmin/instances/{instance_id}/applications/{application_id}/apiClients/{api_client_id}/regenerate"
-            )
+        api_resp: ApiResponse[Any] = self._instance_apps.regenerate_api_client_secret_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            application_id=application_id,
+            api_client_id=api_client_id,
         )
-        if response.status_code != 200:
-            logger.error("Could not regenerate application secret.")
-            _log_error_response(response)
-            response.raise_for_status()
-        return EdFiAdminInstanceApplicationSecretRegeneratedResponse(**response.json())
+        return EdFiAdminInstanceApplicationSecretRegeneratedResponse(**_json(api_resp))
 
+    @_RETRY
     def get_edfi_instance_endpoints(self, instance_id: str, year: int) -> EdFiAdminInstanceApplicationEndpoints:
-        response: httpx.Response = self._get(
-            self._path(relative=f"edfiadmin/instances/{instance_id}/years/{year}/endpoints")
+        api_resp: ApiResponse[Any] = self._instances.get_ed_fi_admin_instance_year_endpoints_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            year=year,
         )
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        return EdFiAdminInstanceApplicationEndpoints(**response.json())
+        return EdFiAdminInstanceApplicationEndpoints(**_json(api_resp))
 
+    @_RETRY
     def search_datasync_connections(
         self,
         name: str,
@@ -326,17 +300,14 @@ class EdGraphClient:
         if provider_id:
             filter_builder.and_(filter_str=f'providerId == "{provider_id}"')
 
-        params: dict[str, int | str] = {
-            "pageSize": _PAGE_SIZE,
-            "pageIndex": 0,
-            "filter": filter_builder.build(),
-            "orderBy": "name desc",
-        }
-        response: httpx.Response = self._get(self._path(relative="datasync/connections"), params=params)
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        data: Any = response.json()
+        api_resp: ApiResponse[Any] = self._connections.get_all_tenant_data_sync_connections_with_http_info(
+            tenant_id=self._tenant_id,
+            page_size=_PAGE_SIZE,
+            page_index=0,
+            filter=filter_builder.build(),
+            order_by="name desc",
+        )
+        data = _json(api_resp)
         return PaginatedResponse[DataSyncConnection](
             page_index=data["pageIndex"],
             page_size=data["pageSize"],
@@ -344,48 +315,41 @@ class EdGraphClient:
             data=[DataSyncConnection(**item) for item in data["data"]],
         )
 
+    @_RETRY
     def test_datasync_connection(self, request: EdFiAdminTestConnectionRequest) -> EdFiAdminConnectionTestedResponse:
-        response: httpx.Response = self._post(
-            self._path(relative="datasync/connections/testconnection"),
-            json=request.model_dump(by_alias=True),
+        api_resp: ApiResponse[Any] = self._connections.connection_tested_response_with_http_info(
+            tenant_id=self._tenant_id,
+            data_sync_api_connection_v1_test_connection_request=request.model_dump(by_alias=True),
         )
-        if response.status_code != 200:
-            _log_error_response(response)
-            response.raise_for_status()
-        return EdFiAdminConnectionTestedResponse(**response.json())
+        return EdFiAdminConnectionTestedResponse(**_json(api_resp))
 
+    @_RETRY
     def create_datasync_connection(
         self, request: CreateEdFiAdminConnectionRequest
     ) -> EdFiAdminConnectionCreatedResponse:
         logger.info("Creating Data Sync connection '%s'.", request.name)
-        response: httpx.Response = self._post(
-            self._path(relative="datasync/connections"),
-            json=request.model_dump(by_alias=True),
+        api_resp: ApiResponse[None] = self._connections.create_tenant_data_sync_connection_with_http_info(
+            tenant_id=self._tenant_id,
+            ed_graph_http_aggregators_tenant_api_controllers_v1_view_models_requests_connections_create_connection_request=request.model_dump(
+                by_alias=True
+            ),
         )
-        # The API returns 202 Accepted and places the ID in the Location header.
-        if response.status_code != 202:
-            logger.error("Could not create Data Sync connection.")
-            _log_error_response(response)
-            response.raise_for_status()
-
-        location: str | None = response.headers.get("Location")
+        location: str | None = (api_resp.headers or {}).get("Location")
         if not location:
             raise LocationHeaderNotFoundError(
                 "Response to create_datasync_connection did not contain a Location header."
             )
-
         connection_id: str = urlparse(location).path.split("/")[-1]
         logger.debug("Created Data Sync connection '%s'.", connection_id)
         return EdFiAdminConnectionCreatedResponse(connection_id=connection_id)
 
+    @_RETRY
     def create_datasync_job(self, request: DataSyncCreateJobRequest) -> DataSyncJob:
         logger.info("Creating Data Sync job '%s'.", request.name)
-        response: httpx.Response = self._post(
-            self._path(relative="datasync/jobs"),
-            json=request.model_dump(by_alias=True),
+        api_resp: ApiResponse[Any] = self._jobs.create_tenant_data_sync_job_with_http_info(
+            tenant_id=self._tenant_id,
+            ed_graph_http_aggregators_tenant_api_controllers_v1_view_models_requests_jobs_create_job_request=request.model_dump(
+                by_alias=True
+            ),
         )
-        if response.status_code != 201:
-            logger.error("Could not create Data Sync job.")
-            _log_error_response(response)
-            response.raise_for_status()
-        return DataSyncJob(**response.json())
+        return DataSyncJob(**_json(api_resp))

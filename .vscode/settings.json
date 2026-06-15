@@ -3,9 +3,13 @@
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.codeActionsOnSave": {
-            "source.fixAll.ruff": "explicit",
-            "source.organizeImports.ruff": "explicit"
+            "source.fixAll.ruff": "always",
+            "source.organizeImports.ruff": "always"
         }
+    },
+    "[toml]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "tombi-toml.tombi"
     },
     "ruff.nativeServer": "on",
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
