@@ -1,6 +1,5 @@
 [dependency-groups]
 dev = [
-  "hatchling>=1.25",
   "ruff>=0.9",
   "ty>=0.0.0a1",
 ]
