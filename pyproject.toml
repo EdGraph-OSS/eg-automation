@@ -1,0 +1,26 @@
+[dependency-groups]
+dev = [
+  "ruff>=0.9",
+  "ty>=0.0.0a1",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "W"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["eg_core"]
+
+[tool.ty.environment]
+python-version = "3.14"
+extra-paths = ["Core/Python"]
+
+[tool.uv]
+package = false
+exclude-newer = "7 days"
+
+[tool.uv.workspace]
+members = ["Core/Python"]
