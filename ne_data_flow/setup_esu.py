@@ -3,7 +3,8 @@
 Pre-configures Ed-Fi artifacts for an ESU tenant:
   - Provisions NE-extended Ed-Fi instance for the current school year
   - Creates vendor: the ESU itself
-  - Resolves claim set: "Read/Write All - District Only (Relationship-Based Auth)"
+  - Provisions claim set: "Read/Write All - District Only (Relationship-Based Auth)"
+    (created automatically from Core/claim_set_configurations/district_only.json if missing)
 
 Prerequisite: none
 State written: esu-state.json
@@ -18,7 +19,7 @@ from dotenv import load_dotenv
 
 from edgraph.client import EdGraphClient
 from edgraph.config import EdGraphEnvironment
-from edgraph.exceptions import ClaimSetNotFoundError, InstanceNotProvisionedError
+from edgraph.exceptions import InstanceNotProvisionedError
 from edgraph.models import (
     CreateEdFiAdminInstanceRequest,
     CreateEdFiAdminInstanceSchoolYearsRequest,
@@ -39,6 +40,7 @@ from ._constants import (
     NE_ED_FI_TIER,
     NE_ED_FI_VERSION,
 )
+from ._claim_set import ensure_district_only_claimset
 from .models import EsuState
 
 logging.basicConfig(
@@ -144,15 +146,7 @@ def main() -> None:
         state.vendor_id = r.vendor_id
         state.save(state_path)
 
-    # ------------------------------------------------------------------
-    # NOTE: "Read/Write All - District Only (Relationship-Based Auth)" must
-    # be configured using the "ESU 6" tenant claim set as a reference.
-    # ------------------------------------------------------------------
-    try:
-        client.find_claimset_by_name(instance_id, CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY)
-    except ClaimSetNotFoundError as exc:
-        logger.error("%s\nCreate the missing claim set manually in EdGraph before re-running this script.", exc)
-        raise
+    ensure_district_only_claimset(client, instance_id, CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY)
 
     logger.info("setup_esu completed. State saved to '%s'.", state_path)
 

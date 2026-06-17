@@ -1,10 +1,10 @@
-from edgraph.models import EdFiDatabaseEngine, EdFiExtension, EdFiTier, EdFiVersion
+from edgraph.models import EdFiDatabaseEngine, EdFiExtension, EdFiOdsBackupCode, EdFiTier, EdFiVersion
 
-NE_ED_FI_VERSION: EdFiVersion = "Suite 3 v7.3 (Data Standard 4.0)"
+NE_ED_FI_VERSION: EdFiVersion = "Suite 3 v7.3 (Data Standard 5.0)"
 NE_ED_FI_EXTENSION: EdFiExtension = "Ne"
 NE_ED_FI_DATABASE_ENGINE: EdFiDatabaseEngine = "MsSql"
 NE_ED_FI_TIER: EdFiTier = "General Purpose"
-NE_ED_FI_ODS_BACKUP_CODE = "GrandBend"
+NE_ED_FI_ODS_BACKUP_CODE: EdFiOdsBackupCode = "Empty"
 
 OPERATIONAL_CONTEXT_URI = "uri://edgraph.com"
 
@@ -17,7 +17,7 @@ DATASYNC_JOB_TYPE_ID = ""
 # TODO: Look up the correct profile ID for the target tenant in EdGraph.
 DATASYNC_PROFILE_ID = ""
 
-CLAIMSET_READ_WRITE_NO_FURTHER_AUTH = "Read/Write - No Further Auth"
+CLAIMSET_READ_WRITE_NO_FURTHER_AUTH = "Read/Write All - No Further Auth"
 CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY = "Read/Write All - District Only (Relationship-Based Auth)"
 
 SCHEDULE_TIMEZONE = "America/Chicago"

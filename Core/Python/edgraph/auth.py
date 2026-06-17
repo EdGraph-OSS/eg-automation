@@ -75,6 +75,7 @@ class EdGraphTokenRetriever:
 
         expires_in = float(payload.get("expires_in", 3600))
         logger.info("Successfully obtained access token.")
+        logger.debug("Access token: %s", token)
         return _AccessToken(
             value=token,
             expires_at=time.monotonic() + expires_in - _TOKEN_BUFFER_SECONDS,

@@ -72,6 +72,18 @@ Each script writes a JSON state file to the working directory:
 
 State files allow a script to be re-run safely — resources that were already created are reused.
 
+## Claim Set Configuration
+
+`setup-tenant` and `setup-esu` both require the claim set **"Read/Write All - District Only (Relationship-Based Auth)"**. If it does not already exist in the provisioned instance, it is created automatically using the resource claim permissions defined in:
+
+```
+Core/claim_set_configurations/district_only.json
+```
+
+To update the permissions for this claim set (e.g. to add or remove auth strategies), edit that JSON file. The next run against a fresh instance will pick up the changes.
+
+The claim set **"Read/Write All - No Further Auth"** must already exist in the instance — it is always pre-provisioned by EdGraph and is not created by these scripts.
+
 ## TODOs before first run
 
 - [ ] Confirm `DATASYNC_JOB_TYPE_ID` in `ne_data_flow/_constants.py` (lookup from EdGraph documentation or API explorer)

@@ -168,6 +168,17 @@ class EdFiAdminInstanceClaimSet(EdGraphModel):
     is_system_reserved: bool
 
 
+class EdFiAdminClaimSetCreatedResponse(EdGraphModel):
+    tenant_id: str
+    instance_id: str
+    claim_set_id: int
+
+
+class EdFiAdminPlaceholderLeaCreatedResponse(EdGraphModel):
+    education_organization_id: int
+    id: str
+
+
 class CreateEdFiAdminVendorRequest(EdGraphModel):
     vendor_name: str
     namespace_prefixes: list[str] | None = None

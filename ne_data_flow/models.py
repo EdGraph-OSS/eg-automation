@@ -28,6 +28,8 @@ class TenantState(State):
     nde_vendor_id: int | None = None
     act_vendor_id: int | None = None
     district_vendor_id: int | None = None
+    placeholder_lea_id: str | None = None
+    placeholder_lea_education_organization_id: int | None = None
     sea_sync_application_id: int | None = None
     act_sync_application_id: int | None = None
     esu_sync_application_id: int | None = None

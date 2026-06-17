@@ -3,8 +3,9 @@
 Pre-configures Ed-Fi artifacts for a district tenant:
   - Provisions NE-extended Ed-Fi instance for the current school year
   - Creates vendors: NDE, ACT, and the district itself
-  - Resolves claim sets: "Read/Write - No Further Auth" and
-    "Read/Write All - District Only (Relationship-Based Auth)"
+  - Resolves claim set: "Read/Write All - No Further Auth" (must already exist in the instance)
+  - Provisions claim set: "Read/Write All - District Only (Relationship-Based Auth)"
+    (created automatically from Core/claim_set_configurations/district_only.json if missing)
   - Creates applications: NE SEA to District Sync, ACT to District Sync,
     District to ESU Obfuscated Sync
   - Regenerates application secrets and saves credentials to state
@@ -13,16 +14,16 @@ Prerequisite: none
 State written: tenant-state.json
 """
 
+import json
 import logging
 import os
 from pathlib import Path
 from typing import cast
 
 from dotenv import load_dotenv
-
 from edgraph.client import EdGraphClient
 from edgraph.config import EdGraphEnvironment
-from edgraph.exceptions import ClaimSetNotFoundError, InstanceNotProvisionedError
+from edgraph.exceptions import InstanceNotProvisionedError
 from edgraph.models import (
     CreateEdFiAdminApplicationRequest,
     CreateEdFiAdminInstanceRequest,
@@ -33,11 +34,13 @@ from edgraph.models import (
     EdFiAdminInstanceApplication,
     EdFiAdminInstanceApplicationEndpoints,
     EdFiAdminVendorCreatedResponse,
+    EducationOrganizationRequest,
     OdsBackupCode,
     PaginatedResponse,
     VendorRequest,
 )
 
+from ._claim_set import ensure_district_only_claimset
 from ._constants import (
     CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY,
     CLAIMSET_READ_WRITE_NO_FURTHER_AUTH,
@@ -49,6 +52,8 @@ from ._constants import (
     OPERATIONAL_CONTEXT_URI,
 )
 from .models import ApplicationCredentials, TenantState
+
+_PLACEHOLDER_LEA_PATH = Path(__file__).parent.parent / "Core" / "placeholders" / "edgraph_placeholder_lea.json"
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
@@ -83,7 +88,7 @@ def _resolve_ods_backup_code(client: EdGraphClient) -> OdsBackupCode:
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     state_path = Path(STATE_FILENAME)
     environment: EdGraphEnvironment = cast(EdGraphEnvironment, os.environ.get("EDGRAPH_ENVIRONMENT", "Dev"))
     client_id: str = os.environ["EDGRAPH_CLIENT_ID"]
@@ -167,17 +172,28 @@ def main() -> None:
         state.district_vendor_id = r.vendor_id
         state.save(state_path)
 
-    # ------------------------------------------------------------------
-    # NOTE: Claim sets are expected to exist in the provisioned instance.
-    # "Read/Write All - District Only (Relationship-Based Auth)" must be
-    # configured using the "ESU 6" tenant claim set as a reference.
-    # ------------------------------------------------------------------
-    try:
-        rw_no_auth = client.find_claimset_by_name(instance_id, CLAIMSET_READ_WRITE_NO_FURTHER_AUTH)
-        rw_district_only = client.find_claimset_by_name(instance_id, CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY)
-    except ClaimSetNotFoundError as exc:
-        logger.error("%s\nCreate the missing claim set manually in EdGraph before re-running this script.", exc)
-        raise
+    rw_no_auth = client.find_claimset_by_name(instance_id, CLAIMSET_READ_WRITE_NO_FURTHER_AUTH)
+    rw_district_only = ensure_district_only_claimset(client, instance_id, CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY)
+
+    if not state.placeholder_lea_id:
+        with open(_PLACEHOLDER_LEA_PATH, encoding="utf-8") as f:
+            placeholder_lea_data = json.load(f)
+        lea = client.create_placeholder_lea(instance_id, school_year, placeholder_lea_data["localEducationAgency"])
+        state.placeholder_lea_id = lea.id
+        state.placeholder_lea_education_organization_id = lea.education_organization_id
+        state.save(state_path)
+        logger.info("Created placeholder LEA '%s' (educationOrganizationId=%s).", lea.id, lea.education_organization_id)
+    else:
+        logger.info("Reusing existing placeholder LEA '%s'.", state.placeholder_lea_id)
+
+    if state.placeholder_lea_id is None or state.placeholder_lea_education_organization_id is None:
+        raise RuntimeError("Placeholder LEA state is incomplete; re-run with a clean state file.")
+
+    placeholder_lea = EducationOrganizationRequest(
+        id=state.placeholder_lea_id,
+        education_organization_id=state.placeholder_lea_education_organization_id,
+        addresses=[],
+    )
 
     if not state.sea_sync_application_id:
         app = client.create_edfi_instance_application(
@@ -188,7 +204,7 @@ def main() -> None:
                 operational_context_uri=OPERATIONAL_CONTEXT_URI,
                 vendor_id=state.nde_vendor_id,
                 vendor=VendorRequest(namespace_prefixes=[]),
-                education_organizations=[],
+                education_organizations=[placeholder_lea],
             ),
         )
         state.sea_sync_application_id = app.application_id
@@ -203,7 +219,7 @@ def main() -> None:
                 operational_context_uri=OPERATIONAL_CONTEXT_URI,
                 vendor_id=state.act_vendor_id,
                 vendor=VendorRequest(namespace_prefixes=[]),
-                education_organizations=[],
+                education_organizations=[placeholder_lea],
             ),
         )
         state.act_sync_application_id = app.application_id
@@ -218,7 +234,7 @@ def main() -> None:
                 operational_context_uri=OPERATIONAL_CONTEXT_URI,
                 vendor_id=state.district_vendor_id,
                 vendor=VendorRequest(namespace_prefixes=[]),
-                education_organizations=[],
+                education_organizations=[placeholder_lea],
             ),
         )
         state.esu_sync_application_id = app.application_id

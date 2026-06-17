@@ -9,11 +9,16 @@ from edgraph_platform_client.api import (
     InstancesApi,
     InstancesApplicationsApi,
     InstancesClaimSetsApi,
+    InstancesEducationOrganizationsLocalEducationAgenciesApi,
     InstancesVendorsApi,
     JobsApi,
 )
 from edgraph_platform_client.api_response import ApiResponse
 from edgraph_platform_client.exceptions import ApiException
+from edgraph_platform_client.models import (
+    EdfiAdminApiEdfiAdminV1CreateLocalEducationAgencyRequest,
+    EdfiAdminApiEdfiAdminV1SaveClaimSetRequest,
+)
 from tenacity import (
     after_log,
     before_sleep_log,
@@ -44,6 +49,7 @@ from .models import (
     DataSyncCreateJobRequest,
     DataSyncJob,
     EdFiAdminApplicationCreatedResponse,
+    EdFiAdminClaimSetCreatedResponse,
     EdFiAdminConnection,
     EdFiAdminConnectionCreatedResponse,
     EdFiAdminConnectionTestedResponse,
@@ -53,6 +59,7 @@ from .models import (
     EdFiAdminInstanceApplicationSecretRegeneratedResponse,
     EdFiAdminInstanceClaimSet,
     EdFiAdminInstanceCreatedResponse,
+    EdFiAdminPlaceholderLeaCreatedResponse,
     EdFiAdminTestConnectionRequest,
     EdFiAdminVendorCreatedResponse,
     OdsBackupCode,
@@ -62,6 +69,20 @@ from .models import (
 logger: logging.Logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 1000
+
+
+class _TokenRefreshingApiClient(ApiClient):
+    def __init__(self, configuration: Configuration, retriever: EdGraphTokenRetriever) -> None:
+        super().__init__(configuration=configuration)
+        self._retriever = retriever
+
+    def update_params_for_auth(
+        self, headers, queries, auth_settings, resource_path, method, body, request_auth=None
+    ) -> None:
+        self.configuration.access_token = self._retriever.get()
+        super().update_params_for_auth(headers, queries, auth_settings, resource_path, method, body, request_auth)
+
+
 _OPERATIONAL_CONTEXT_URI = "uri://edgraph.com"
 
 _RETRY = retry(
@@ -96,12 +117,11 @@ class EdGraphClient:
         self._retriever = EdGraphTokenRetriever(urls.identity, client_id, client_secret)
 
         config = Configuration(host=urls.tenant)
-        config.refresh_api_key_hook = lambda c: setattr(c, "access_token", self._retriever.get())
-
-        self._api_client = ApiClient(configuration=config)
+        self._api_client = _TokenRefreshingApiClient(configuration=config, retriever=self._retriever)
         self._instances = InstancesApi(self._api_client)
         self._instance_apps = InstancesApplicationsApi(self._api_client)
         self._claimsets = InstancesClaimSetsApi(self._api_client)
+        self._leas = InstancesEducationOrganizationsLocalEducationAgenciesApi(self._api_client)
         self._vendors = InstancesVendorsApi(self._api_client)
         self._connections = ConnectionsApi(self._api_client)
         self._jobs = JobsApi(self._api_client)
@@ -218,6 +238,58 @@ class EdGraphClient:
                 "Verify the claim set exists or create it manually before running this script."
             )
         return match
+
+    @_RETRY
+    def get_instance_resource_claims(self, instance_id: str) -> list[Any]:
+        api_resp = self._claimsets.get_resource_claims_grid_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            claim_set_id=0,
+        )
+        return _json(api_resp).get("resourceClaims") or []
+
+    @_RETRY
+    def create_edfi_instance_claimset(
+        self, instance_id: str, name: str, resource_claims: list[Any]
+    ) -> EdFiAdminClaimSetCreatedResponse:
+        logger.info("Creating claim set '%s' in instance '%s'.", name, instance_id)
+        request = EdfiAdminApiEdfiAdminV1SaveClaimSetRequest.model_validate({
+            "tenantId": self._tenant_id,
+            "instanceId": instance_id,
+            "claimSetId": 0,
+            "claimSetName": name,
+            "resourceClaims": resource_claims,
+        })
+        api_resp = self._claimsets.create_claim_set_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            edfi_admin_api_edfi_admin_v1_save_claim_set_request=request,
+        )
+        return EdFiAdminClaimSetCreatedResponse(**_json(api_resp))
+
+    @_RETRY
+    def create_placeholder_lea(
+        self, instance_id: str, school_year: int, lea_body: dict[str, Any]
+    ) -> EdFiAdminPlaceholderLeaCreatedResponse:
+        logger.info("Creating placeholder LEA in instance '%s' for year %s.", instance_id, school_year)
+        request = EdfiAdminApiEdfiAdminV1CreateLocalEducationAgencyRequest.model_validate({
+            "tenantId": self._tenant_id,
+            "instanceId": instance_id,
+            "year": school_year,
+            "localEducationAgency": lea_body,
+        })
+        api_resp = self._leas.create_local_education_agency_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            year=school_year,
+            edfi_admin_api_edfi_admin_v1_create_local_education_agency_request=request,
+        )
+        data = _json(api_resp)
+        lea = data["localEducationAgency"]
+        return EdFiAdminPlaceholderLeaCreatedResponse(
+            id=lea["id"],
+            education_organization_id=lea["educationOrganizationId"],
+        )
 
     @_RETRY
     def create_edfi_instance_vendor(
