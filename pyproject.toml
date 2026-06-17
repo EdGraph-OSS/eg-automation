@@ -1,8 +1,29 @@
+[project]
+name = "eg-automation"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["eg-core", "python-dotenv>=1.0"]
+
+[project.scripts]
+ne-data-flow = "ne_data_flow.run:main"
+obfuscated-sync-to-esu = "ne_data_flow.obfuscated_sync_to_esu:main"
+setup-esu = "ne_data_flow.setup_esu:main"
+setup-tenant = "ne_data_flow.setup_tenant:main"
+sync-from-act = "ne_data_flow.sync_from_act:main"
+sync-from-sea = "ne_data_flow.sync_from_sea:main"
+
 [dependency-groups]
 dev = [
   "ruff>=0.9",
   "ty>=0.0.0a1",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ne_data_flow"]
 
 [tool.ruff]
 line-length = 120
@@ -12,15 +33,17 @@ target-version = "py314"
 select = ["E", "F", "I", "N", "UP", "W"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["eg_core"]
+known-first-party = ["eg_core", "ne_data_flow"]
 
 [tool.ty.environment]
 python-version = "3.14"
 extra-paths = ["Core/Python"]
 
 [tool.uv]
-package = false
 exclude-newer = "7 days"
 
 [tool.uv.workspace]
 members = ["Core/Python"]
+
+[tool.uv.sources]
+eg-core = { workspace = true }
