@@ -1,11 +1,11 @@
+import asyncio
 import json
 import logging
 import time
 import urllib.parse
 from dataclasses import dataclass
 
-import urllib3
-from urllib3.response import BaseHTTPResponse
+import httpx
 
 logger: logging.Logger = logging.getLogger(name=__name__)
 
@@ -34,15 +34,19 @@ class EdGraphTokenRetriever:
         self._client_id: str = client_id
         self._client_secret: str = client_secret
         self._token: _AccessToken | None = None
-        self._http = urllib3.PoolManager()
+        self._http = httpx.Client()
 
     def close(self) -> None:
-        self._http.clear()
+        self._http.close()
 
     def get(self) -> str:
         if self._token is None or self._token.soon_to_expire:
             self._token: _AccessToken = self._fetch()
         return self._token.value
+
+    async def ensure_async(self) -> None:
+        if self._token is None or self._token.soon_to_expire:
+            self._token = await asyncio.to_thread(self._fetch)
 
     def _fetch(self) -> _AccessToken:
         url = f"{self._identity_url}/connect/token"
@@ -55,19 +59,20 @@ class EdGraphTokenRetriever:
                 "client_secret": self._client_secret,
             }
         )
-        response: BaseHTTPResponse = self._http.request(
-            method="POST",
+        response: httpx.Response = self._http.post(
             url=url,
-            body=body,
+            content=body.encode(),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=urllib3.Timeout(connect=10, read=10),
+            timeout=10.0,
         )
 
-        if response.status >= 400:
-            error_body = response.data.decode("utf-8", errors="replace")
-            raise ValueError(f"Token request failed with status {response.status}: {error_body}")
+        if response.status_code >= 400:
+            raise ValueError(
+                f"Token request failed with status {response.status_code}: "
+                f"{response.content.decode('utf-8', errors='replace')}"
+            )
 
-        payload: dict = json.loads(response.data.decode(encoding="utf-8"))
+        payload: dict = json.loads(response.content.decode(encoding="utf-8"))
         token: str | None = payload.get("access_token")
 
         if not token:

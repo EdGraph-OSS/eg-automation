@@ -40,23 +40,23 @@ def _merge_resource_claims(instance_claims: list[Any], config_claims: list[Any])
     return result
 
 
-def ensure_district_only_claimset(
+async def ensure_district_only_claimset(
     client: EdGraphClient,
     instance_id: str,
     claimset_name: str,
 ) -> EdFiAdminInstanceClaimSet:
     """Returns the district-only claim set, creating it from the bundled config if it doesn't exist."""
     try:
-        return client.find_claimset_by_name(instance_id, claimset_name)
+        return await client.find_claimset_by_name(instance_id, claimset_name)
     except ClaimSetNotFoundError:
         logger.info("Claim set '%s' not found; creating it.", claimset_name)
 
     with open(_DISTRICT_ONLY_CONFIG, encoding="utf-8") as f:
         config = json.load(f)
 
-    instance_claims = client.get_instance_resource_claims(instance_id)
+    instance_claims = await client.get_instance_resource_claims(instance_id)
     merged = _merge_resource_claims(instance_claims, config.get("resourceClaims") or [])
-    created = client.create_edfi_instance_claimset(instance_id, claimset_name, merged)
+    created = await client.create_edfi_instance_claimset(instance_id, claimset_name, merged)
     return EdFiAdminInstanceClaimSet(
         claim_set_id=created.claim_set_id,
         claim_set_name=claimset_name,
