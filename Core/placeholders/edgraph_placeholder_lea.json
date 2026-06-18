@@ -1,0 +1,17 @@
+{
+    "localEducationAgency": {
+        "nameOfInstitution": "EdGraph Placeholder",
+        "addresses": [],
+        "categories": [
+            {
+                "codeValue": "Local Education Agency",
+                "description": "Local Education Agency",
+                "educationOrganizationCategoryDescriptorId": 804,
+                "namespace": "uri://ed-fi.org/EducationOrganizationCategoryDescriptor",
+                "shortDescription": "Local Education Agency"
+            }
+        ],
+        "localEducationAgencyId": -1,
+        "localEducationAgencyCategoryDescriptorCodeValue": "Other local education agency"
+    }
+}

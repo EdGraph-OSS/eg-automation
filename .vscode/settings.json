@@ -13,5 +13,7 @@
     },
     "ruff.nativeServer": "on",
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.envFile": "${workspaceFolder}/.env",
+    "python.terminal.useEnvFile": true,
     "ty.interpreter": "${workspaceFolder}/.venv/Scripts/python.exe"
 }
