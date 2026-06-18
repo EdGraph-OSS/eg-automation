@@ -15,6 +15,7 @@ Prerequisites: setup_tenant, sync_from_sea, sync_from_act, and setup_esu must ha
 State written: esu-sync-state.json
 """
 
+import asyncio
 import datetime
 import logging
 import os
@@ -22,7 +23,6 @@ from pathlib import Path
 from typing import cast
 
 from dotenv import load_dotenv
-
 from edgraph.client import EdGraphClient
 from edgraph.config import EdGraphEnvironment
 from edgraph.exceptions import ClaimSetNotFoundError, ConnectionTestFailedError
@@ -70,7 +70,7 @@ def _edfi_connection_metadata(
     ]
 
 
-def main() -> None:
+async def _main() -> None:
     load_dotenv()
     tenant_state_path = Path(TENANT_STATE_FILENAME)
     esu_state_path = Path(ESU_STATE_FILENAME)
@@ -100,96 +100,78 @@ def main() -> None:
     if esu_state.instance_id is None or esu_state.vendor_id is None:
         raise ValueError("ESU instance or vendor ID is missing from esu-state.json. Re-run setup_esu to populate them.")
 
-    district_client = EdGraphClient(environment, tenant_id, client_id, client_secret)
-    esu_client = EdGraphClient(environment, esu_tenant_id, client_id, client_secret)
-
-    if not state.esu_application_id:
-        try:
-            claimset = esu_client.find_claimset_by_name(esu_state.instance_id, CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY)
-        except ClaimSetNotFoundError as exc:
-            logger.error("%s\nCreate the missing claim set manually in EdGraph before re-running.", exc)
-            raise
-
-        app = esu_client.create_edfi_instance_application(
-            esu_state.instance_id,
-            CreateEdFiAdminApplicationRequest(
-                application_name=f"{district_name} - ESU Obfuscated Sync",
-                claim_set_name=claimset.claim_set_name,
-                operational_context_uri=OPERATIONAL_CONTEXT_URI,
-                vendor_id=esu_state.vendor_id,
-                vendor=VendorRequest(namespace_prefixes=[]),
-                education_organizations=[],
-            ),
-        )
-        state.esu_application_id = app.application_id
-        state.save(state_path)
-
-    if not state.esu_sync_credentials:
-        esu_api_client = esu_client.get_edfi_instance_application(esu_state.instance_id, state.esu_application_id)
-        secret_resp = esu_client.regenerate_application_secret(
-            esu_state.instance_id, state.esu_application_id, esu_api_client.api_client_id
-        )
-        esu_endpoints = esu_client.get_edfi_instance_endpoints(esu_state.instance_id, school_year)
-        state.esu_sync_credentials = ApplicationCredentials(
-            auth_url=esu_endpoints.auth_url,
-            resources_url=esu_endpoints.get_url("Resource", "Primary (Read-Write)"),
-            key=esu_api_client.key,
-            secret=secret_resp.new_secret,
-        )
-        state.save(state_path)
-
-    source_name = f"Ed-Fi {school_year} (Source)"
-    esu_creds_district = tenant_state.esu_sync_credentials
-    if not state.source_connection_id:
-        existing = district_client.search_datasync_connections(source_name)
-        if existing.has_elements():
-            state.source_connection_id = existing.data[0].connection_id
-            logger.info("Reusing existing source connection '%s'.", state.source_connection_id)
-        else:
-            created = district_client.create_datasync_connection(
-                CreateEdFiAdminConnectionRequest(
-                    tenant_id=tenant_id,
-                    name=source_name,
-                    provider_id=EDFI_CONNECTION_PROVIDER_ID,
-                    connection_type_id=EDFI_CONNECTION_TYPE_ID,
-                    connection_metadata=_edfi_connection_metadata(
-                        esu_creds_district.auth_url,
-                        esu_creds_district.resources_url,
-                        esu_creds_district.key,
-                        esu_creds_district.secret,
-                    ),
+    async with (
+        EdGraphClient(environment, tenant_id, client_id, client_secret) as district_client,
+        EdGraphClient(environment, esu_tenant_id, client_id, client_secret) as esu_client,
+    ):
+        if not state.esu_application_id:
+            try:
+                claimset = await esu_client.find_claimset_by_name(
+                    esu_state.instance_id, CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY
                 )
-            )
-            state.source_connection_id = created.connection_id
-        state.save(state_path)
+            except ClaimSetNotFoundError as exc:
+                logger.error("%s\nCreate the missing claim set manually in EdGraph before re-running.", exc)
+                raise
 
-    dest_name = f"{esu_name} Ed-Fi {school_year} (Destination)"
-    esu_creds = state.esu_sync_credentials
-    if not state.destination_connection_id:
-        test_result = district_client.test_datasync_connection(
-            EdFiAdminTestConnectionRequest(
-                connection_id=None,
-                provider_id=EDFI_CONNECTION_PROVIDER_ID,
-                connection_type_id=EDFI_CONNECTION_TYPE_ID,
-                connection_metadata=_edfi_connection_metadata(
-                    esu_creds.auth_url, esu_creds.resources_url, esu_creds.key, esu_creds.secret
+            app = await esu_client.create_edfi_instance_application(
+                esu_state.instance_id,
+                CreateEdFiAdminApplicationRequest(
+                    application_name=f"{district_name} - ESU Obfuscated Sync",
+                    claim_set_name=claimset.claim_set_name,
+                    operational_context_uri=OPERATIONAL_CONTEXT_URI,
+                    vendor_id=esu_state.vendor_id,
+                    vendor=VendorRequest(namespace_prefixes=[]),
+                    education_organizations=[],
                 ),
             )
-        )
-        if not test_result.is_successful:
-            raise ConnectionTestFailedError(
-                f"ESU destination connection test failed. Result code: {test_result.connection_result_code}"
-            )
+            state.esu_application_id = app.application_id
+            state.save(state_path)
 
-        existing = district_client.search_datasync_connections(dest_name)
-        if existing.has_elements():
-            state.destination_connection_id = existing.data[0].connection_id
-            logger.info("Reusing existing destination connection '%s'.", state.destination_connection_id)
-        else:
-            created = district_client.create_datasync_connection(
-                CreateEdFiAdminConnectionRequest(
-                    tenant_id=tenant_id,
-                    name=dest_name,
+        if not state.esu_sync_credentials:
+            esu_api_client = await esu_client.get_edfi_instance_application(esu_state.instance_id, state.esu_application_id)
+            secret_resp = await esu_client.regenerate_application_secret(
+                esu_state.instance_id, state.esu_application_id, esu_api_client.api_client_id
+            )
+            esu_endpoints = await esu_client.get_edfi_instance_endpoints(esu_state.instance_id, school_year)
+            state.esu_sync_credentials = ApplicationCredentials(
+                auth_url=esu_endpoints.auth_url,
+                resources_url=esu_endpoints.get_url("Resource", "Primary (Read-Write)"),
+                key=esu_api_client.key,
+                secret=secret_resp.new_secret,
+            )
+            state.save(state_path)
+
+        source_name = f"Ed-Fi {school_year} (Source)"
+        esu_creds_district = tenant_state.esu_sync_credentials
+        if not state.source_connection_id:
+            existing = await district_client.search_datasync_connections(source_name)
+            if existing.has_elements():
+                state.source_connection_id = existing.data[0].connection_id
+                logger.info("Reusing existing source connection '%s'.", state.source_connection_id)
+            else:
+                created = await district_client.create_datasync_connection(
+                    CreateEdFiAdminConnectionRequest(
+                        tenant_id=tenant_id,
+                        name=source_name,
+                        provider_id=EDFI_CONNECTION_PROVIDER_ID,
+                        connection_type_id=EDFI_CONNECTION_TYPE_ID,
+                        connection_metadata=_edfi_connection_metadata(
+                            esu_creds_district.auth_url,
+                            esu_creds_district.resources_url,
+                            esu_creds_district.key,
+                            esu_creds_district.secret,
+                        ),
+                    )
+                )
+                state.source_connection_id = created.connection_id
+            state.save(state_path)
+
+        dest_name = f"{esu_name} Ed-Fi {school_year} (Destination)"
+        esu_creds = state.esu_sync_credentials
+        if not state.destination_connection_id:
+            test_result = await district_client.test_datasync_connection(
+                EdFiAdminTestConnectionRequest(
+                    connection_id=None,
                     provider_id=EDFI_CONNECTION_PROVIDER_ID,
                     connection_type_id=EDFI_CONNECTION_TYPE_ID,
                     connection_metadata=_edfi_connection_metadata(
@@ -197,30 +179,55 @@ def main() -> None:
                     ),
                 )
             )
-            state.destination_connection_id = created.connection_id
-        state.save(state_path)
+            if not test_result.is_successful:
+                raise ConnectionTestFailedError(
+                    f"ESU destination connection test failed. Result code: {test_result.connection_result_code}"
+                )
 
-    if not state.job_id:
-        job = district_client.create_datasync_job(
-            DataSyncCreateJobRequest(
-                name=f"District to {esu_name} Obfuscated Sync ({school_year})",
-                job_type_id=DATASYNC_JOB_TYPE_ID,
-                source_connection_id=state.source_connection_id,
-                destination_connection_id=state.destination_connection_id,
-                profile_id=DATASYNC_PROFILE_ID,
-                schedule=DataSyncCreateJobScheduleRequest(
-                    enabled=False,
-                    begin_date=datetime.date.today().isoformat(),
-                    cron="0 23 * * *",
-                    time_zone=SCHEDULE_TIMEZONE,
-                ),
+            existing = await district_client.search_datasync_connections(dest_name)
+            if existing.has_elements():
+                state.destination_connection_id = existing.data[0].connection_id
+                logger.info("Reusing existing destination connection '%s'.", state.destination_connection_id)
+            else:
+                created = await district_client.create_datasync_connection(
+                    CreateEdFiAdminConnectionRequest(
+                        tenant_id=tenant_id,
+                        name=dest_name,
+                        provider_id=EDFI_CONNECTION_PROVIDER_ID,
+                        connection_type_id=EDFI_CONNECTION_TYPE_ID,
+                        connection_metadata=_edfi_connection_metadata(
+                            esu_creds.auth_url, esu_creds.resources_url, esu_creds.key, esu_creds.secret
+                        ),
+                    )
+                )
+                state.destination_connection_id = created.connection_id
+            state.save(state_path)
+
+        if not state.job_id:
+            job = await district_client.create_datasync_job(
+                DataSyncCreateJobRequest(
+                    name=f"District to {esu_name} Obfuscated Sync ({school_year})",
+                    job_type_id=DATASYNC_JOB_TYPE_ID,
+                    source_connection_id=state.source_connection_id,
+                    destination_connection_id=state.destination_connection_id,
+                    profile_id=DATASYNC_PROFILE_ID,
+                    schedule=DataSyncCreateJobScheduleRequest(
+                        enabled=False,
+                        begin_date=datetime.date.today().isoformat(),
+                        cron="0 23 * * *",
+                        time_zone=SCHEDULE_TIMEZONE,
+                    ),
+                )
             )
-        )
-        state.job_id = job.job_id
-        state.save(state_path)
-        logger.info("Created Data Sync job '%s'.", job.job_id)
+            state.job_id = job.job_id
+            state.save(state_path)
+            logger.info("Created Data Sync job '%s'.", job.job_id)
 
-    logger.info("obfuscated_sync_to_esu completed. State saved to '%s'.", state_path)
+        logger.info("obfuscated_sync_to_esu completed. State saved to '%s'.", state_path)
+
+
+def main() -> None:
+    asyncio.run(_main())
 
 
 if __name__ == "__main__":

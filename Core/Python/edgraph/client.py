@@ -76,6 +76,10 @@ class _TokenRefreshingApiClient(ApiClient):
         super().__init__(configuration=configuration)
         self._retriever = retriever
 
+    async def call_api(self, *args, **kwargs):
+        await self._retriever.ensure_async()
+        return await super().call_api(*args, **kwargs)
+
     def update_params_for_auth(
         self, headers, queries, auth_settings, resource_path, method, body, request_auth=None
     ) -> None:
@@ -126,22 +130,23 @@ class EdGraphClient:
         self._connections = ConnectionsApi(self._api_client)
         self._jobs = JobsApi(self._api_client)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self._retriever.close()
+        await self._api_client.close()
 
-    def __enter__(self) -> EdGraphClient:
+    async def __aenter__(self) -> EdGraphClient:
         return self
 
-    def __exit__(self, *args: object) -> None:
-        self.close()
+    async def __aexit__(self, *args: object) -> None:
+        await self.close()
 
     @_RETRY
-    def get_edfi_connections(
+    async def get_edfi_connections(
         self,
         database_engine: str,
         connection_type: str = "EdGraphManagedHosted",
     ) -> PaginatedResponse[EdFiAdminConnection]:
-        api_resp: ApiResponse[Any] = self._connections.get_ed_fi_connections_async_with_http_info(
+        api_resp: ApiResponse[Any] = await self._connections.get_ed_fi_connections_async_with_http_info(
             tenant_id=self._tenant_id,
             page_size=_PAGE_SIZE,
             page_index=0,
@@ -159,8 +164,10 @@ class EdGraphClient:
         )
 
     @_RETRY
-    def get_ods_backup_codes(self) -> PaginatedResponse[OdsBackupCode]:
-        api_resp: ApiResponse[Any] = self._connections.get_ed_fi_ods_backup_codes_descriptors_async_with_http_info(
+    async def get_ods_backup_codes(self) -> PaginatedResponse[OdsBackupCode]:
+        api_resp: ApiResponse[
+            Any
+        ] = await self._connections.get_ed_fi_ods_backup_codes_descriptors_async_with_http_info(
             tenant_id=self._tenant_id,
         )
         data = _json(api_resp)
@@ -172,17 +179,17 @@ class EdGraphClient:
         )
 
     @_RETRY
-    def create_edfi_instance(self, request: CreateEdFiAdminInstanceRequest) -> EdFiAdminInstanceCreatedResponse:
+    async def create_edfi_instance(self, request: CreateEdFiAdminInstanceRequest) -> EdFiAdminInstanceCreatedResponse:
         logger.info("Creating Ed-Fi instance '%s'.", request.instance_name)
-        api_resp = self._instances.create_instance_async_with_http_info(
+        api_resp = await self._instances.create_instance_async_with_http_info(
             tenant_id=self._tenant_id,
             edfi_admin_api_edfi_admin_v1_create_instance_request=request.model_dump(by_alias=True),
         )
         return EdFiAdminInstanceCreatedResponse(**_json(api_resp))
 
     @_RETRY
-    def search_edfi_instances(self, instance_id: str) -> list[EdFiAdminInstance]:
-        api_resp = self._instances.get_instances_async_with_http_info(
+    async def search_edfi_instances(self, instance_id: str) -> list[EdFiAdminInstance]:
+        api_resp = await self._instances.get_instances_async_with_http_info(
             tenant_id=self._tenant_id,
             page_size=10,
             page_index=0,
@@ -198,9 +205,9 @@ class EdGraphClient:
         before_sleep=before_sleep_log(logger, log_level=logging.INFO),
         after=after_log(logger, log_level=logging.INFO),
     )
-    def poll_edfi_instance_provisioned(self, instance_id: str) -> bool:
+    async def poll_edfi_instance_provisioned(self, instance_id: str) -> bool:
         """Polls until the instance is provisioned. Retries up to 10 times over 45 minutes."""
-        instances: list[EdFiAdminInstance] = self.search_edfi_instances(instance_id)
+        instances: list[EdFiAdminInstance] = await self.search_edfi_instances(instance_id)
         if not instances:
             raise InstanceNotFoundError(f"Instance '{instance_id}' not found.")
         instance: EdFiAdminInstance | None = next((i for i in instances if i.id == instance_id), None)
@@ -211,8 +218,8 @@ class EdGraphClient:
         return True
 
     @_RETRY
-    def get_edfi_instance_claimsets(self, instance_id: str) -> PaginatedResponse[EdFiAdminInstanceClaimSet]:
-        api_resp = self._claimsets.get_claim_sets_async_with_http_info(
+    async def get_edfi_instance_claimsets(self, instance_id: str) -> PaginatedResponse[EdFiAdminInstanceClaimSet]:
+        api_resp = await self._claimsets.get_claim_sets_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             page_size=2000,
@@ -226,9 +233,9 @@ class EdGraphClient:
             data=[EdFiAdminInstanceClaimSet(**item) for item in data["data"]],
         )
 
-    def find_claimset_by_name(self, instance_id: str, claimset_name: str) -> EdFiAdminInstanceClaimSet:
+    async def find_claimset_by_name(self, instance_id: str, claimset_name: str) -> EdFiAdminInstanceClaimSet:
         """Returns the claim set with the given name, or raises ClaimSetNotFoundError."""
-        result: PaginatedResponse[EdFiAdminInstanceClaimSet] = self.get_edfi_instance_claimsets(instance_id)
+        result: PaginatedResponse[EdFiAdminInstanceClaimSet] = await self.get_edfi_instance_claimsets(instance_id)
         match: EdFiAdminInstanceClaimSet | None = next(
             (cs for cs in result.data if cs.claim_set_name == claimset_name), None
         )
@@ -240,8 +247,8 @@ class EdGraphClient:
         return match
 
     @_RETRY
-    def get_instance_resource_claims(self, instance_id: str) -> list[Any]:
-        api_resp = self._claimsets.get_resource_claims_grid_async_with_http_info(
+    async def get_instance_resource_claims(self, instance_id: str) -> list[Any]:
+        api_resp = await self._claimsets.get_resource_claims_grid_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             claim_set_id=0,
@@ -249,18 +256,20 @@ class EdGraphClient:
         return _json(api_resp).get("resourceClaims") or []
 
     @_RETRY
-    def create_edfi_instance_claimset(
+    async def create_edfi_instance_claimset(
         self, instance_id: str, name: str, resource_claims: list[Any]
     ) -> EdFiAdminClaimSetCreatedResponse:
         logger.info("Creating claim set '%s' in instance '%s'.", name, instance_id)
-        request = EdfiAdminApiEdfiAdminV1SaveClaimSetRequest.model_validate({
-            "tenantId": self._tenant_id,
-            "instanceId": instance_id,
-            "claimSetId": 0,
-            "claimSetName": name,
-            "resourceClaims": resource_claims,
-        })
-        api_resp = self._claimsets.create_claim_set_async_with_http_info(
+        request = EdfiAdminApiEdfiAdminV1SaveClaimSetRequest.model_validate(
+            {
+                "tenantId": self._tenant_id,
+                "instanceId": instance_id,
+                "claimSetId": 0,
+                "claimSetName": name,
+                "resourceClaims": resource_claims,
+            }
+        )
+        api_resp = await self._claimsets.create_claim_set_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             edfi_admin_api_edfi_admin_v1_save_claim_set_request=request,
@@ -268,17 +277,19 @@ class EdGraphClient:
         return EdFiAdminClaimSetCreatedResponse(**_json(api_resp))
 
     @_RETRY
-    def create_placeholder_lea(
+    async def create_placeholder_lea(
         self, instance_id: str, school_year: int, lea_body: dict[str, Any]
     ) -> EdFiAdminPlaceholderLeaCreatedResponse:
         logger.info("Creating placeholder LEA in instance '%s' for year %s.", instance_id, school_year)
-        request = EdfiAdminApiEdfiAdminV1CreateLocalEducationAgencyRequest.model_validate({
-            "tenantId": self._tenant_id,
-            "instanceId": instance_id,
-            "year": school_year,
-            "localEducationAgency": lea_body,
-        })
-        api_resp = self._leas.create_local_education_agency_async_with_http_info(
+        request = EdfiAdminApiEdfiAdminV1CreateLocalEducationAgencyRequest.model_validate(
+            {
+                "tenantId": self._tenant_id,
+                "instanceId": instance_id,
+                "year": school_year,
+                "localEducationAgency": lea_body,
+            }
+        )
+        api_resp = await self._leas.create_local_education_agency_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             year=school_year,
@@ -292,11 +303,11 @@ class EdGraphClient:
         )
 
     @_RETRY
-    def create_edfi_instance_vendor(
+    async def create_edfi_instance_vendor(
         self, instance_id: str, request: CreateEdFiAdminVendorRequest
     ) -> EdFiAdminVendorCreatedResponse:
         logger.info("Creating vendor '%s' in instance '%s'.", request.vendor_name, instance_id)
-        api_resp = self._vendors.create_vendor_async_with_http_info(
+        api_resp = await self._vendors.create_vendor_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             edfi_admin_api_edfi_admin_v1_create_vendor_request=request.model_dump(by_alias=True),
@@ -304,7 +315,7 @@ class EdGraphClient:
         return EdFiAdminVendorCreatedResponse(**_json(api_resp))
 
     @_RETRY
-    def create_edfi_instance_application(
+    async def create_edfi_instance_application(
         self, instance_id: str, request: CreateEdFiAdminApplicationRequest
     ) -> EdFiAdminApplicationCreatedResponse:
         logger.info(
@@ -312,7 +323,7 @@ class EdGraphClient:
             request.application_name,
             instance_id,
         )
-        api_resp: ApiResponse[Any] = self._instance_apps.create_application_async_with_http_info(
+        api_resp: ApiResponse[Any] = await self._instance_apps.create_application_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             edfi_admin_api_edfi_admin_v1_create_ed_fi_application_request=request.model_dump(by_alias=True),
@@ -320,8 +331,10 @@ class EdGraphClient:
         return EdFiAdminApplicationCreatedResponse(**_json(api_resp))
 
     @_RETRY
-    def get_edfi_instance_application(self, instance_id: str, application_id: int) -> EdFiAdminInstanceApplication:
-        api_resp: ApiResponse[Any] = self._instance_apps.get_application_api_clients_async_with_http_info(
+    async def get_edfi_instance_application(
+        self, instance_id: str, application_id: int
+    ) -> EdFiAdminInstanceApplication:
+        api_resp: ApiResponse[Any] = await self._instance_apps.get_application_api_clients_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             application_id=str(application_id),
@@ -334,7 +347,7 @@ class EdGraphClient:
         return match
 
     @_RETRY
-    def regenerate_application_secret(
+    async def regenerate_application_secret(
         self, instance_id: str, application_id: int, api_client_id: int
     ) -> EdFiAdminInstanceApplicationSecretRegeneratedResponse:
         logger.info(
@@ -342,7 +355,7 @@ class EdGraphClient:
             api_client_id,
             application_id,
         )
-        api_resp: ApiResponse[Any] = self._instance_apps.regenerate_api_client_secret_async_with_http_info(
+        api_resp: ApiResponse[Any] = await self._instance_apps.regenerate_api_client_secret_async_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             application_id=application_id,
@@ -351,8 +364,8 @@ class EdGraphClient:
         return EdFiAdminInstanceApplicationSecretRegeneratedResponse(**_json(api_resp))
 
     @_RETRY
-    def get_edfi_instance_endpoints(self, instance_id: str, year: int) -> EdFiAdminInstanceApplicationEndpoints:
-        api_resp: ApiResponse[Any] = self._instances.get_ed_fi_admin_instance_year_endpoints_with_http_info(
+    async def get_edfi_instance_endpoints(self, instance_id: str, year: int) -> EdFiAdminInstanceApplicationEndpoints:
+        api_resp: ApiResponse[Any] = await self._instances.get_ed_fi_admin_instance_year_endpoints_with_http_info(
             tenant_id=self._tenant_id,
             instance_id=instance_id,
             year=year,
@@ -360,7 +373,7 @@ class EdGraphClient:
         return EdFiAdminInstanceApplicationEndpoints(**_json(api_resp))
 
     @_RETRY
-    def search_datasync_connections(
+    async def search_datasync_connections(
         self,
         name: str,
         connection_type_id: str | None = None,
@@ -372,7 +385,7 @@ class EdGraphClient:
         if provider_id:
             filter_builder.and_(filter_str=f'providerId == "{provider_id}"')
 
-        api_resp: ApiResponse[Any] = self._connections.get_all_tenant_data_sync_connections_with_http_info(
+        api_resp: ApiResponse[Any] = await self._connections.get_all_tenant_data_sync_connections_with_http_info(
             tenant_id=self._tenant_id,
             page_size=_PAGE_SIZE,
             page_index=0,
@@ -388,19 +401,21 @@ class EdGraphClient:
         )
 
     @_RETRY
-    def test_datasync_connection(self, request: EdFiAdminTestConnectionRequest) -> EdFiAdminConnectionTestedResponse:
-        api_resp: ApiResponse[Any] = self._connections.connection_tested_response_with_http_info(
+    async def test_datasync_connection(
+        self, request: EdFiAdminTestConnectionRequest
+    ) -> EdFiAdminConnectionTestedResponse:
+        api_resp: ApiResponse[Any] = await self._connections.connection_tested_response_with_http_info(
             tenant_id=self._tenant_id,
             data_sync_api_connection_v1_test_connection_request=request.model_dump(by_alias=True),
         )
         return EdFiAdminConnectionTestedResponse(**_json(api_resp))
 
     @_RETRY
-    def create_datasync_connection(
+    async def create_datasync_connection(
         self, request: CreateEdFiAdminConnectionRequest
     ) -> EdFiAdminConnectionCreatedResponse:
         logger.info("Creating Data Sync connection '%s'.", request.name)
-        api_resp: ApiResponse[None] = self._connections.create_tenant_data_sync_connection_with_http_info(
+        api_resp: ApiResponse[None] = await self._connections.create_tenant_data_sync_connection_with_http_info(
             tenant_id=self._tenant_id,
             ed_graph_http_aggregators_tenant_api_controllers_v1_view_models_requests_connections_create_connection_request=request.model_dump(
                 by_alias=True
@@ -416,9 +431,9 @@ class EdGraphClient:
         return EdFiAdminConnectionCreatedResponse(connection_id=connection_id)
 
     @_RETRY
-    def create_datasync_job(self, request: DataSyncCreateJobRequest) -> DataSyncJob:
+    async def create_datasync_job(self, request: DataSyncCreateJobRequest) -> DataSyncJob:
         logger.info("Creating Data Sync job '%s'.", request.name)
-        api_resp: ApiResponse[Any] = self._jobs.create_tenant_data_sync_job_with_http_info(
+        api_resp: ApiResponse[Any] = await self._jobs.create_tenant_data_sync_job_with_http_info(
             tenant_id=self._tenant_id,
             ed_graph_http_aggregators_tenant_api_controllers_v1_view_models_requests_jobs_create_job_request=request.model_dump(
                 by_alias=True
