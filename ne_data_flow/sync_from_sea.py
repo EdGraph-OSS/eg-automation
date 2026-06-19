@@ -25,10 +25,16 @@ from edgraph.exceptions import ConnectionTestFailedError
 from edgraph.models import (
     ConnectionMetadataField,
     CreateEdFiAdminConnectionRequest,
+    DataSyncConnection,
     DataSyncCreateJobRequest,
     DataSyncCreateJobScheduleRequest,
     DataSyncJob,
+    EdFiAdminConnectionCreatedResponse,
+    EdFiAdminConnectionTestedResponse,
+    EdFiAdminInstanceApplication,
+    EdFiAdminInstanceApplicationEndpoints,
     EdFiAdminTestConnectionRequest,
+    PaginatedResponse,
 )
 
 from ._constants import (
@@ -38,7 +44,7 @@ from ._constants import (
     EDFI_CONNECTION_TYPE_ID,
     SCHEDULE_TIMEZONE,
 )
-from .models import SyncState, TenantState
+from .models import ApplicationCredentials, SyncState, TenantState
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
@@ -63,7 +69,7 @@ def _edfi_connection_metadata(
 
 
 async def _main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     tenant_state_path = Path(TENANT_STATE_FILENAME)
     state_path = Path(STATE_FILENAME)
 
@@ -76,9 +82,14 @@ async def _main() -> None:
     tenant_id: str = os.environ["TENANT_ID"]
     nde_external_instance_id: str = os.environ["NDE_EXTERNAL_INSTANCE_ID"]
 
-    tenant_state = TenantState.load(tenant_state_path)
-    state = SyncState.load(state_path) if state_path.exists() else SyncState()
-    school_year = tenant_state.school_year
+    tenant_state: TenantState = TenantState.load(tenant_state_path)
+    state: SyncState = SyncState.load(state_path) if state_path.exists() else SyncState()
+    school_year: int = tenant_state.school_year
+
+    if tenant_state.sea_sync_application_id is None:
+        raise ValueError(
+            "SEA sync application ID is missing from tenant-state.json. Re-run setup_tenant to populate it."
+        )
 
     if tenant_state.sea_sync_credentials is None:
         raise ValueError(
@@ -86,20 +97,22 @@ async def _main() -> None:
         )
 
     async with EdGraphClient(environment, tenant_id, client_id, client_secret) as client:
-        nde_endpoints = await client.get_edfi_instance_endpoints(nde_external_instance_id, school_year)
-        nde_api_client = await client.get_edfi_instance_application(
+        nde_endpoints: EdFiAdminInstanceApplicationEndpoints = await client.get_edfi_instance_endpoints(
+            nde_external_instance_id, school_year
+        )
+        nde_api_client: EdFiAdminInstanceApplication = await client.get_edfi_instance_application(
             nde_external_instance_id,
-            application_id=0,  # TODO: obtain the correct application ID
+            tenant_state.sea_sync_application_id,
         )
 
         source_name = f"NE SEA {school_year} (Source)"
         if not state.source_connection_id:
-            existing = await client.search_datasync_connections(source_name)
+            existing: PaginatedResponse[DataSyncConnection] = await client.search_datasync_connections(source_name)
             if existing.has_elements():
                 state.source_connection_id = existing.data[0].connection_id
                 logger.info("Reusing existing source connection '%s'.", state.source_connection_id)
             else:
-                created = await client.create_datasync_connection(
+                created: EdFiAdminConnectionCreatedResponse = await client.create_datasync_connection(
                     CreateEdFiAdminConnectionRequest(
                         tenant_id=tenant_id,
                         name=source_name,
@@ -117,9 +130,9 @@ async def _main() -> None:
             state.save(state_path)
 
         dest_name = f"Ed-Fi {school_year} NE SEA (Destination)"
-        sea_creds = tenant_state.sea_sync_credentials
+        sea_creds: ApplicationCredentials = tenant_state.sea_sync_credentials
         if not state.destination_connection_id:
-            test_result = await client.test_datasync_connection(
+            test_result: EdFiAdminConnectionTestedResponse = await client.test_datasync_connection(
                 EdFiAdminTestConnectionRequest(
                     connection_id=None,
                     provider_id=EDFI_CONNECTION_PROVIDER_ID,
@@ -134,12 +147,12 @@ async def _main() -> None:
                     f"Destination connection test failed. Result code: {test_result.connection_result_code}"
                 )
 
-            existing = await client.search_datasync_connections(dest_name)
+            existing: PaginatedResponse[DataSyncConnection] = await client.search_datasync_connections(dest_name)
             if existing.has_elements():
                 state.destination_connection_id = existing.data[0].connection_id
                 logger.info("Reusing existing destination connection '%s'.", state.destination_connection_id)
             else:
-                created = await client.create_datasync_connection(
+                created: EdFiAdminConnectionCreatedResponse = await client.create_datasync_connection(
                     CreateEdFiAdminConnectionRequest(
                         tenant_id=tenant_id,
                         name=dest_name,

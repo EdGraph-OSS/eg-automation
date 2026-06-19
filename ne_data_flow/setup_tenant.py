@@ -193,7 +193,9 @@ async def _main() -> None:
             state.placeholder_lea_id = lea.id
             state.placeholder_lea_education_organization_id = lea.education_organization_id
             state.save(state_path)
-            logger.info("Created placeholder LEA '%s' (educationOrganizationId=%s).", lea.id, lea.education_organization_id)
+            logger.info(
+                "Created placeholder LEA '%s' (educationOrganizationId=%s).", lea.id, lea.education_organization_id
+            )
         else:
             logger.info("Reusing existing placeholder LEA '%s'.", state.placeholder_lea_id)
 
@@ -260,8 +262,8 @@ async def _main() -> None:
                 continue
 
             api_client: EdFiAdminInstanceApplication = await client.get_edfi_instance_application(instance_id, app_id)
-            secret_resp: EdFiAdminInstanceApplicationSecretRegeneratedResponse = await client.regenerate_application_secret(
-                instance_id, app_id, api_client.api_client_id
+            secret_resp: EdFiAdminInstanceApplicationSecretRegeneratedResponse = (
+                await client.regenerate_application_secret(instance_id, app_id, api_client.api_client_id)
             )
             endpoints: EdFiAdminInstanceApplicationEndpoints = await client.get_edfi_instance_endpoints(
                 instance_id, school_year
