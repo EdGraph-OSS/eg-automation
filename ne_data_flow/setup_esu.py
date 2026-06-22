@@ -76,11 +76,11 @@ async def _resolve_ods_backup_code(client: EdGraphClient) -> OdsBackupCode:
 
 
 async def _main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     state_path = Path(STATE_FILENAME)
     environment: EdGraphEnvironment = cast(EdGraphEnvironment, os.environ.get("EDGRAPH_ENVIRONMENT", "Dev"))
-    client_id: str = os.environ["EDGRAPH_CLIENT_ID"]
-    client_secret: str = os.environ["EDGRAPH_CLIENT_SECRET"]
+    client_id: str = os.environ["ESU_EDGRAPH_CLIENT_ID"]
+    client_secret: str = os.environ["ESU_EDGRAPH_CLIENT_SECRET"]
     esu_tenant_id: str = os.environ["ESU_TENANT_ID"]
     school_year = int(os.environ.get("SCHOOL_YEAR", "2026"))
     esu_name: str = os.environ["ESU_NAME"]

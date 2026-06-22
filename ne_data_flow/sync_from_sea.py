@@ -1,8 +1,8 @@
 """sync_from_sea — Item #16704
 
 Configures data synchronization from NDE/Adviser into the district's Ed-Fi instance:
-  - Creates Data Sync connection: "NE SEA {year} (Source)"
-    Credentials sourced from the external Ed-Fi instance holding NDE/Adviser creds.
+  - Resolves Data Sync source connection by name from NDE_CONNECTION_ID env var.
+    The connection must already be provisioned; this script will raise an error if not found.
   - Creates Data Sync connection: "Ed-Fi {year} NE SEA (Destination)"
     Credentials sourced from the "NE SEA to District Sync" application (tenant-state.json).
   - Creates Data Sync job: "NE SEA to Ed-Fi Sync ({year})", nightly @ 21:00 CST.
@@ -25,20 +25,25 @@ from edgraph.exceptions import ConnectionTestFailedError
 from edgraph.models import (
     ConnectionMetadataField,
     CreateEdFiAdminConnectionRequest,
+    DataSyncConnection,
+    DataSyncCreateJobMetadataRequest,
     DataSyncCreateJobRequest,
     DataSyncCreateJobScheduleRequest,
-    DataSyncJob,
+    DataSyncJobCreatedResponse,
+    EdFiAdminConnectionCreatedResponse,
+    EdFiAdminConnectionTestedResponse,
     EdFiAdminTestConnectionRequest,
+    PaginatedResponse,
 )
 
 from ._constants import (
-    DATASYNC_JOB_TYPE_ID,
-    DATASYNC_PROFILE_ID,
+    DATASYNC_JOB_TYPE_NAME,
     EDFI_CONNECTION_PROVIDER_ID,
     EDFI_CONNECTION_TYPE_ID,
     SCHEDULE_TIMEZONE,
 )
-from .models import SyncState, TenantState
+from ._edfi_resources import get_entities_value
+from .models import ApplicationCredentials, SyncState, TenantState
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
@@ -63,7 +68,7 @@ def _edfi_connection_metadata(
 
 
 async def _main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     tenant_state_path = Path(TENANT_STATE_FILENAME)
     state_path = Path(STATE_FILENAME)
 
@@ -74,11 +79,16 @@ async def _main() -> None:
     client_id: str = os.environ["EDGRAPH_CLIENT_ID"]
     client_secret: str = os.environ["EDGRAPH_CLIENT_SECRET"]
     tenant_id: str = os.environ["TENANT_ID"]
-    nde_external_instance_id: str = os.environ["NDE_EXTERNAL_INSTANCE_ID"]
+    nde_connection_id: str = os.environ["NDE_CONNECTION_ID"]
 
-    tenant_state = TenantState.load(tenant_state_path)
-    state = SyncState.load(state_path) if state_path.exists() else SyncState()
-    school_year = tenant_state.school_year
+    tenant_state: TenantState = TenantState.load(tenant_state_path)
+    state: SyncState = SyncState.load(state_path) if state_path.exists() else SyncState()
+    school_year: int = tenant_state.school_year
+
+    if tenant_state.sea_sync_application_id is None:
+        raise ValueError(
+            "SEA sync application ID is missing from tenant-state.json. Re-run setup_tenant to populate it."
+        )
 
     if tenant_state.sea_sync_credentials is None:
         raise ValueError(
@@ -86,40 +96,16 @@ async def _main() -> None:
         )
 
     async with EdGraphClient(environment, tenant_id, client_id, client_secret) as client:
-        nde_endpoints = await client.get_edfi_instance_endpoints(nde_external_instance_id, school_year)
-        nde_api_client = await client.get_edfi_instance_application(
-            nde_external_instance_id,
-            application_id=0,  # TODO: obtain the correct application ID
-        )
-
-        source_name = f"NE SEA {school_year} (Source)"
         if not state.source_connection_id:
-            existing = await client.search_datasync_connections(source_name)
-            if existing.has_elements():
-                state.source_connection_id = existing.data[0].connection_id
-                logger.info("Reusing existing source connection '%s'.", state.source_connection_id)
-            else:
-                created = await client.create_datasync_connection(
-                    CreateEdFiAdminConnectionRequest(
-                        tenant_id=tenant_id,
-                        name=source_name,
-                        provider_id=EDFI_CONNECTION_PROVIDER_ID,
-                        connection_type_id=EDFI_CONNECTION_TYPE_ID,
-                        connection_metadata=_edfi_connection_metadata(
-                            nde_endpoints.auth_url,
-                            nde_endpoints.get_url("Resource", "Primary (Read-Write)"),
-                            nde_api_client.key,
-                            nde_api_client.secret,
-                        ),
-                    )
-                )
-                state.source_connection_id = created.connection_id
+            connection: DataSyncConnection = await client.get_datasync_connection(nde_connection_id)
+            state.source_connection_id = connection.connection_id
+            logger.info("Found source connection '%s'.", state.source_connection_id)
             state.save(state_path)
 
         dest_name = f"Ed-Fi {school_year} NE SEA (Destination)"
-        sea_creds = tenant_state.sea_sync_credentials
+        sea_creds: ApplicationCredentials = tenant_state.sea_sync_credentials
         if not state.destination_connection_id:
-            test_result = await client.test_datasync_connection(
+            test_result: EdFiAdminConnectionTestedResponse = await client.test_datasync_connection(
                 EdFiAdminTestConnectionRequest(
                     connection_id=None,
                     provider_id=EDFI_CONNECTION_PROVIDER_ID,
@@ -134,12 +120,12 @@ async def _main() -> None:
                     f"Destination connection test failed. Result code: {test_result.connection_result_code}"
                 )
 
-            existing = await client.search_datasync_connections(dest_name)
+            existing: PaginatedResponse[DataSyncConnection] = await client.search_datasync_connections(dest_name)
             if existing.has_elements():
                 state.destination_connection_id = existing.data[0].connection_id
                 logger.info("Reusing existing destination connection '%s'.", state.destination_connection_id)
             else:
-                created = await client.create_datasync_connection(
+                created: EdFiAdminConnectionCreatedResponse = await client.create_datasync_connection(
                     CreateEdFiAdminConnectionRequest(
                         tenant_id=tenant_id,
                         name=dest_name,
@@ -154,19 +140,38 @@ async def _main() -> None:
             state.save(state_path)
 
         if not state.job_id:
-            job: DataSyncJob = await client.create_datasync_job(
+            job_type_id, profile_id = await client.get_datasync_job_type(DATASYNC_JOB_TYPE_NAME)
+            nde_edfi_base_url: str = sea_creds.resources_url.rstrip("/").removesuffix("/data/v3")
+            entities: str = await get_entities_value(nde_edfi_base_url, sea_creds.key, sea_creds.secret)
+            logger.info("Resolved %d entities for job metadata.", entities.count(";"))
+            job: DataSyncJobCreatedResponse = await client.create_datasync_job(
                 request=DataSyncCreateJobRequest(
                     name=f"NE SEA to Ed-Fi Sync ({school_year})",
-                    job_type_id=DATASYNC_JOB_TYPE_ID,
+                    job_type_id=job_type_id,
                     source_connection_id=state.source_connection_id,
                     destination_connection_id=state.destination_connection_id,
-                    profile_id=DATASYNC_PROFILE_ID,
+                    profile_id=profile_id,
                     schedule=DataSyncCreateJobScheduleRequest(
-                        enabled=False,
+                        enabled=True,
                         begin_date=datetime.date.today().isoformat(),
-                        cron="0 21 * * *",
+                        cron="0 0 21 * * ? *",
                         time_zone=SCHEDULE_TIMEZONE,
                     ),
+                    job_metadata=[
+                        DataSyncCreateJobMetadataRequest(code="entities", value=entities),
+                        DataSyncCreateJobMetadataRequest(code="maxLimitRecord", value="100"),
+                        DataSyncCreateJobMetadataRequest(code="studentIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(code="staffIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(
+                            code="schoolEducationOrganizationIdSystemDescriptor", value=""
+                        ),
+                        DataSyncCreateJobMetadataRequest(code="localEducationOrganizationIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(code="stateEducationOrganizationIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(
+                            code="serviceCenterEducationOrganizationIdSystemDescriptor", value=""
+                        ),
+                        DataSyncCreateJobMetadataRequest(code="ObfuscateDocumentId", value=""),
+                    ],
                 )
             )
             state.job_id = job.job_id

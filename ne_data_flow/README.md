@@ -48,13 +48,15 @@ State files are written to the working directory. Run scripts from the directory
 | Variable | Required by | Description |
 |---|---|---|
 | `EDGRAPH_ENVIRONMENT` | All | `Dev`, `QA`, `Production`, or `Local` |
-| `EDGRAPH_CLIENT_ID` | All | OAuth2 client ID |
-| `EDGRAPH_CLIENT_SECRET` | All | OAuth2 client secret |
-| `TENANT_ID` | All | District tenant ID |
+| `EDGRAPH_CLIENT_ID` | `setup-tenant`, `sync-from-sea`, `sync-from-act`, `obfuscated-sync-to-esu` | OAuth2 client ID (district) |
+| `EDGRAPH_CLIENT_SECRET` | `setup-tenant`, `sync-from-sea`, `sync-from-act`, `obfuscated-sync-to-esu` | OAuth2 client secret (district) |
+| `ESU_EDGRAPH_CLIENT_ID` | `setup-esu` | OAuth2 client ID (ESU) |
+| `ESU_EDGRAPH_CLIENT_SECRET` | `setup-esu` | OAuth2 client secret (ESU) |
+| `TENANT_ID` | `setup-tenant`, `sync-from-sea`, `sync-from-act`, `obfuscated-sync-to-esu` | District tenant ID |
+| `ESU_TENANT_ID` | `setup-esu`, `obfuscated-sync-to-esu` | ESU tenant ID |
 | `SCHOOL_YEAR` | All | School year (e.g. `2026`) |
 | `DISTRICT_NAME` | `setup-tenant`, `obfuscated-sync-to-esu` | Full district name (used as vendor name) |
 | `ESU_NAME` | `setup-esu`, `obfuscated-sync-to-esu` | ESU name (e.g. `ESU 6`) |
-| `ESU_TENANT_ID` | `obfuscated-sync-to-esu` | ESU tenant ID |
 | `NDE_EXTERNAL_INSTANCE_ID` | `sync-from-sea` | ID of the external Ed-Fi instance with NDE/Adviser credentials |
 | `ACT_EXTERNAL_INSTANCE_ID` | `sync-from-act` | ID of the external Ed-Fi instance with ACT credentials |
 

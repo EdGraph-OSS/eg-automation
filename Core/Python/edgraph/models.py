@@ -288,6 +288,10 @@ class EdFiAdminConnectionCreatedResponse(EdGraphModel):
     connection_id: str
 
 
+class DataSyncJobCreatedResponse(EdGraphModel):
+    job_id: str
+
+
 class EdFiAdminTestConnectionRequest(EdGraphModel):
     connection_id: str | None
     provider_id: str
@@ -340,7 +344,7 @@ class DataSyncCreateJobRequest(EdGraphModel):
     profile_id: str
     job_complete_callback_url: str = ""
     max_api_retry: int = 3
-    max_api_failure: int = 3
+    max_api_failure: int = 100  # matches the EdGraph API's own default
     notification_emails: list[str] = []
     schedule: DataSyncCreateJobScheduleRequest
     job_metadata: list[DataSyncCreateJobMetadataRequest] = []
