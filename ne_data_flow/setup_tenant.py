@@ -19,7 +19,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from edgraph.client import EdGraphClient
@@ -163,14 +163,14 @@ async def _main() -> None:
             state.save(state_path)
 
         if not state.act_vendor_id:
-            r = await client.create_edfi_instance_vendor(
+            r: EdFiAdminVendorCreatedResponse = await client.create_edfi_instance_vendor(
                 instance_id, CreateEdFiAdminVendorRequest(vendor_name="ACT", namespace_prefixes=[])
             )
             state.act_vendor_id = r.vendor_id
             state.save(state_path)
 
         if not state.district_vendor_id:
-            r = await client.create_edfi_instance_vendor(
+            r: EdFiAdminVendorCreatedResponse = await client.create_edfi_instance_vendor(
                 instance_id,
                 CreateEdFiAdminVendorRequest(vendor_name=district_name, namespace_prefixes=[]),
             )
@@ -186,15 +186,18 @@ async def _main() -> None:
 
         if not state.placeholder_lea_id:
             with open(_PLACEHOLDER_LEA_PATH, encoding="utf-8") as f:
-                placeholder_lea_data = json.load(f)
+                placeholder_lea_data: Any = json.load(f)
+            lea_body: Any = placeholder_lea_data["localEducationAgency"]
             lea: EdFiAdminPlaceholderLeaCreatedResponse = await client.create_placeholder_lea(
-                instance_id, school_year, placeholder_lea_data["localEducationAgency"]
+                instance_id, school_year, lea_body
             )
             state.placeholder_lea_id = lea.id
-            state.placeholder_lea_education_organization_id = lea.education_organization_id
+            state.placeholder_lea_education_organization_id = lea_body["localEducationAgencyId"]
             state.save(state_path)
             logger.info(
-                "Created placeholder LEA '%s' (educationOrganizationId=%s).", lea.id, lea.education_organization_id
+                "Created placeholder LEA '%s' (educationOrganizationId=%s).",
+                lea.id,
+                state.placeholder_lea_education_organization_id,
             )
         else:
             logger.info("Reusing existing placeholder LEA '%s'.", state.placeholder_lea_id)
@@ -224,7 +227,7 @@ async def _main() -> None:
             state.save(state_path)
 
         if not state.act_sync_application_id:
-            app = await client.create_edfi_instance_application(
+            app: EdFiAdminApplicationCreatedResponse = await client.create_edfi_instance_application(
                 instance_id,
                 CreateEdFiAdminApplicationRequest(
                     application_name="ACT to District Sync",

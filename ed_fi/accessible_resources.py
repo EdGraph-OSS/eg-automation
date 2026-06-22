@@ -139,9 +139,12 @@ async def get_accessible_resources(
             raise ValueError("No access_token in OAuth response.")
 
         try:
+            # Per Ed-Fi docs, token_info requires the access token as both the Bearer header
+            # and the body field. https://docs.ed-fi.org/reference/ed-fi-api/client-developers-guide/authorization/#token-info
             resp = await http.post(
                 token_info_url,
                 data={"token": token},
+                headers={"Authorization": f"Bearer {token}"},
             )
             resp.raise_for_status()
             token_info: dict[str, Any] = resp.json()
