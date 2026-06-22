@@ -26,6 +26,7 @@ from edgraph.models import (
     ConnectionMetadataField,
     CreateEdFiAdminConnectionRequest,
     DataSyncConnection,
+    DataSyncCreateJobMetadataRequest,
     DataSyncCreateJobRequest,
     DataSyncCreateJobScheduleRequest,
     DataSyncJobCreatedResponse,
@@ -41,6 +42,7 @@ from ._constants import (
     EDFI_CONNECTION_TYPE_ID,
     SCHEDULE_TIMEZONE,
 )
+from ._edfi_resources import get_entities_value
 from .models import ApplicationCredentials, SyncState, TenantState
 
 logging.basicConfig(
@@ -136,19 +138,36 @@ async def _main() -> None:
 
         if not state.job_id:
             job_type_id, profile_id = await client.get_datasync_job_type(DATASYNC_JOB_TYPE_NAME)
+            entities: str = await get_entities_value(act_creds.resources_url, act_creds.key, act_creds.secret)
+            logger.info("Resolved %d entities for job metadata.", len([e for e in entities.split(";") if e]))
             job: DataSyncJobCreatedResponse = await client.create_datasync_job(
-                DataSyncCreateJobRequest(
+                request=DataSyncCreateJobRequest(
                     name=f"ACT to Ed-Fi Sync ({school_year})",
                     job_type_id=job_type_id,
                     source_connection_id=state.source_connection_id,
                     destination_connection_id=state.destination_connection_id,
                     profile_id=profile_id,
                     schedule=DataSyncCreateJobScheduleRequest(
-                        enabled=False,
+                        enabled=True,
                         begin_date=datetime.date.today().isoformat(),
-                        cron="0 0 22 * * ?",
+                        cron="0 0 22 * * ? *",
                         time_zone=SCHEDULE_TIMEZONE,
                     ),
+                    job_metadata=[
+                        DataSyncCreateJobMetadataRequest(code="entities", value=entities),
+                        DataSyncCreateJobMetadataRequest(code="maxLimitRecord", value="100"),
+                        DataSyncCreateJobMetadataRequest(code="studentIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(code="staffIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(
+                            code="schoolEducationOrganizationIdSystemDescriptor", value=""
+                        ),
+                        DataSyncCreateJobMetadataRequest(code="localEducationOrganizationIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(code="stateEducationOrganizationIdSystemDescriptor", value=""),
+                        DataSyncCreateJobMetadataRequest(
+                            code="serviceCenterEducationOrganizationIdSystemDescriptor", value=""
+                        ),
+                        DataSyncCreateJobMetadataRequest(code="ObfuscateDocumentId", value=""),
+                    ],
                 )
             )
             state.job_id = job.job_id

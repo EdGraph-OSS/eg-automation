@@ -141,9 +141,8 @@ async def _main() -> None:
 
         if not state.job_id:
             job_type_id, profile_id = await client.get_datasync_job_type(DATASYNC_JOB_TYPE_NAME)
-            nde_edfi_base_url: str = sea_creds.resources_url.rstrip("/").removesuffix("/data/v3")
-            entities: str = await get_entities_value(nde_edfi_base_url, sea_creds.key, sea_creds.secret)
-            logger.info("Resolved %d entities for job metadata.", entities.count(";"))
+            entities: str = await get_entities_value(sea_creds.resources_url, sea_creds.key, sea_creds.secret)
+            logger.info("Resolved %d entities for job metadata.", len([e for e in entities.split(";") if e]))
             job: DataSyncJobCreatedResponse = await client.create_datasync_job(
                 request=DataSyncCreateJobRequest(
                     name=f"NE SEA to Ed-Fi Sync ({school_year})",
