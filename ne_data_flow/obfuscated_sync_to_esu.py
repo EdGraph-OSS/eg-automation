@@ -38,8 +38,7 @@ from edgraph.models import (
 
 from ._constants import (
     CLAIMSET_READ_WRITE_ALL_DISTRICT_ONLY,
-    DATASYNC_JOB_TYPE_ID,
-    DATASYNC_PROFILE_ID,
+    DATASYNC_JOB_TYPE_NAME,
     EDFI_CONNECTION_PROVIDER_ID,
     EDFI_CONNECTION_TYPE_ID,
     OPERATIONAL_CONTEXT_URI,
@@ -128,7 +127,9 @@ async def _main() -> None:
             state.save(state_path)
 
         if not state.esu_sync_credentials:
-            esu_api_client = await esu_client.get_edfi_instance_application(esu_state.instance_id, state.esu_application_id)
+            esu_api_client = await esu_client.get_edfi_instance_application(
+                esu_state.instance_id, state.esu_application_id
+            )
             secret_resp = await esu_client.regenerate_application_secret(
                 esu_state.instance_id, state.esu_application_id, esu_api_client.api_client_id
             )
@@ -204,17 +205,18 @@ async def _main() -> None:
             state.save(state_path)
 
         if not state.job_id:
+            job_type_id, profile_id = await district_client.get_datasync_job_type(DATASYNC_JOB_TYPE_NAME)
             job = await district_client.create_datasync_job(
                 DataSyncCreateJobRequest(
                     name=f"District to {esu_name} Obfuscated Sync ({school_year})",
-                    job_type_id=DATASYNC_JOB_TYPE_ID,
+                    job_type_id=job_type_id,
                     source_connection_id=state.source_connection_id,
                     destination_connection_id=state.destination_connection_id,
-                    profile_id=DATASYNC_PROFILE_ID,
+                    profile_id=profile_id,
                     schedule=DataSyncCreateJobScheduleRequest(
                         enabled=False,
                         begin_date=datetime.date.today().isoformat(),
-                        cron="0 23 * * *",
+                        cron="0 0 23 * * ?",
                         time_zone=SCHEDULE_TIMEZONE,
                     ),
                 )

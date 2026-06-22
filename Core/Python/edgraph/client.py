@@ -12,6 +12,7 @@ from edgraph_platform_client.api import (
     InstancesEducationOrganizationsLocalEducationAgenciesApi,
     InstancesVendorsApi,
     JobsApi,
+    JobTypesApi,
 )
 from edgraph_platform_client.api_response import ApiResponse
 from edgraph_platform_client.exceptions import ApiException
@@ -35,8 +36,10 @@ from .config import ENVIRONMENT_URLS, ApiUrls, EdGraphEnvironment
 from .exceptions import (
     ApplicationNotFoundError,
     ClaimSetNotFoundError,
+    DataSyncConnectionNotFoundError,
     InstanceNotFoundError,
     InstanceNotProvisionedError,
+    JobTypeNotFoundError,
     LocationHeaderNotFoundError,
 )
 from .filters import FilterBuilder
@@ -47,7 +50,7 @@ from .models import (
     CreateEdFiAdminVendorRequest,
     DataSyncConnection,
     DataSyncCreateJobRequest,
-    DataSyncJob,
+    DataSyncJobCreatedResponse,
     EdFiAdminApplicationCreatedResponse,
     EdFiAdminClaimSetCreatedResponse,
     EdFiAdminConnection,
@@ -129,6 +132,7 @@ class EdGraphClient:
         self._vendors = InstancesVendorsApi(self._api_client)
         self._connections = ConnectionsApi(self._api_client)
         self._jobs = JobsApi(self._api_client)
+        self._job_types = JobTypesApi(self._api_client)
 
     async def close(self) -> None:
         self._retriever.close()
@@ -373,6 +377,21 @@ class EdGraphClient:
         return EdFiAdminInstanceApplicationEndpoints(**_json(api_resp))
 
     @_RETRY
+    async def get_datasync_connection(self, connection_id: str) -> DataSyncConnection:
+        try:
+            api_resp: ApiResponse[
+                Any
+            ] = await self._connections.get_tenant_data_sync_connection_profile_by_id_with_http_info(
+                tenant_id=self._tenant_id,
+                connection_id=connection_id,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                raise DataSyncConnectionNotFoundError(connection_id) from e
+            raise
+        return DataSyncConnection(**_json(api_resp))
+
+    @_RETRY
     async def search_datasync_connections(
         self,
         name: str,
@@ -421,7 +440,10 @@ class EdGraphClient:
                 by_alias=True
             ),
         )
-        location: str | None = (api_resp.headers or {}).get("Location")
+        headers = api_resp.headers or {}
+        location: str | None = next(
+            (v for k, v in headers.items() if k.lower() == "location"), None
+        )
         if not location:
             raise LocationHeaderNotFoundError(
                 "Response to create_datasync_connection did not contain a Location header."
@@ -431,12 +453,50 @@ class EdGraphClient:
         return EdFiAdminConnectionCreatedResponse(connection_id=connection_id)
 
     @_RETRY
-    async def create_datasync_job(self, request: DataSyncCreateJobRequest) -> DataSyncJob:
+    async def get_datasync_job_type(self, name: str) -> tuple[str, str]:
+        """Returns (job_type_id, profile_id) for the named job type (exact, case-sensitive match)."""
+        api_resp: ApiResponse[Any] = await self._job_types.get_all_tenant_data_sync_job_types_with_http_info(
+            tenant_id=self._tenant_id,
+            page_size=_PAGE_SIZE,
+            page_index=0,
+        )
+        data = _json(api_resp)
+        job_type = next(
+            (item for item in data.get("data", []) if item.get("name") == name),
+            None,
+        )
+        if job_type is None:
+            raise JobTypeNotFoundError(name)
+        profiles: list[dict] = job_type.get("profiles") or []
+        if not profiles:
+            raise ValueError(f"Job type '{name}' has no profiles.")
+        if len(profiles) > 1:
+            logger.warning("Job type '%s' has %d profiles; using the first one.", name, len(profiles))
+        job_type_id: str | None = job_type.get("jobTypeId")
+        if not job_type_id:
+            raise ValueError(f"Job type '{name}' is missing 'jobTypeId'.")
+        profile_id: str | None = profiles[0].get("profileId")
+        if not profile_id:
+            raise ValueError(f"Job type '{name}' profile is missing 'profileId'.")
+        return job_type_id, profile_id
+
+    @_RETRY
+    async def create_datasync_job(self, request: DataSyncCreateJobRequest) -> DataSyncJobCreatedResponse:
         logger.info("Creating Data Sync job '%s'.", request.name)
-        api_resp: ApiResponse[Any] = await self._jobs.create_tenant_data_sync_job_with_http_info(
+        api_resp: ApiResponse[None] = await self._jobs.create_tenant_data_sync_job_with_http_info(
             tenant_id=self._tenant_id,
             ed_graph_http_aggregators_tenant_api_controllers_v1_view_models_requests_jobs_create_job_request=request.model_dump(
                 by_alias=True
             ),
         )
-        return DataSyncJob(**_json(api_resp))
+        headers = api_resp.headers or {}
+        location: str | None = next(
+            (v for k, v in headers.items() if k.lower() == "location"), None
+        )
+        if not location:
+            raise LocationHeaderNotFoundError(
+                "Response to create_datasync_job did not contain a Location header."
+            )
+        job_id: str = urlparse(location).path.split("/")[-1]
+        logger.debug("Created Data Sync job '%s'.", job_id)
+        return DataSyncJobCreatedResponse(job_id=job_id)
