@@ -15,7 +15,7 @@ sync-from-sea = "ne_data_flow.sync_from_sea:main"
 [dependency-groups]
 dev = [
   "ruff>=0.9",
-  "ty>=0.0.52",
+  "ty>=0.0.49",
 ]
 
 [build-system]
@@ -41,6 +41,7 @@ extra-paths = ["Core/Python"]
 
 [tool.uv]
 exclude-newer = "7 days"
+exclude-newer-package = { "edgraph-platform-client" = false }
 
 [tool.uv.workspace]
 members = ["Core/Python"]
