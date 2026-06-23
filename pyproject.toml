@@ -39,8 +39,8 @@ known-first-party = ["eg_core", "ne_data_flow"]
 python-version = "3.14"
 extra-paths = ["Core/Python"]
 
-# [tool.uv]
-# exclude-newer = "7 days"
+[tool.uv]
+exclude-newer = "7 days"
 
 [tool.uv.workspace]
 members = ["Core/Python"]
