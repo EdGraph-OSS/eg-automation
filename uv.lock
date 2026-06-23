@@ -47,7 +47,7 @@ wheels = [
 
 [[package]]
 name = "edgraph-platform-client"
-version = "0.0.43"
+version = "0.0.44"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -55,9 +55,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/9e/4c844807b9ed580556356cebe53c1af275c0b479acba783e6ed622c710bd/edgraph_platform_client-0.0.43.tar.gz", hash = "sha256:a42821ecc5f8f00f02f81478c5533be75dedf3b564314411d15752ad83f35234", size = 768965, upload-time = "2026-06-18T19:23:48.582Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/12/e714698956809e7637f77f7cf57c4fe1f761841ffecdd6cbb2b1c8adc104/edgraph_platform_client-0.0.44.tar.gz", hash = "sha256:fb59fc2387d779c2b42c6b9758c4a97eb74a7ab3d0a664e04aa435d8a8e86c02", size = 769277, upload-time = "2026-06-19T19:14:49.243Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/86/e884447f3e32bf344ba817856de1c7bb8e7ba48093ed64fc977161ccd482/edgraph_platform_client-0.0.43-py3-none-any.whl", hash = "sha256:abb18c7741c50b93c57d99ff105bb5aae2b262d6dc6483d7c82d21ebd6b854c5", size = 1997123, upload-time = "2026-06-18T19:23:46.596Z" },
+    { url = "https://files.pythonhosted.org/packages/09/f4/ba789cbc64c12c431719d48869753af824e22066ea9af94123f2bae2aba2/edgraph_platform_client-0.0.44-py3-none-any.whl", hash = "sha256:cc9a3e7c204befe14246d6ba09b8daa3a9fb2d60a6655218018044c94998feee", size = 1997314, upload-time = "2026-06-19T19:14:47.325Z" },
 ]
 
 [[package]]
@@ -100,7 +100,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "edgraph-platform-client", specifier = ">=0.0.43,<0.1" },
+    { name = "edgraph-platform-client", specifier = ">=0.0.44,<0.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tenacity", specifier = ">=9.0" },
