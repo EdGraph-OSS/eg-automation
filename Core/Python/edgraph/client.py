@@ -307,6 +307,26 @@ class EdGraphClient:
         )
 
     @_RETRY
+    async def search_local_education_agencies(
+        self, instance_id: str, school_year: int, name: str
+    ) -> PaginatedResponse[EdFiAdminPlaceholderLeaCreatedResponse]:
+        api_resp = await self._leas.getl_local_education_agencies_async_with_http_info(
+            tenant_id=self._tenant_id,
+            instance_id=instance_id,
+            year=school_year,
+            page_size=_PAGE_SIZE,
+            page_index=0,
+            filter=FilterBuilder(filter_str=f'nameOfInstitution == "{name}"').build(),
+        )
+        data = _json(api_resp)
+        return PaginatedResponse[EdFiAdminPlaceholderLeaCreatedResponse](
+            page_index=data["pageIndex"],
+            page_size=data["pageSize"],
+            count=data["count"],
+            data=[EdFiAdminPlaceholderLeaCreatedResponse(**item) for item in data["data"]],
+        )
+
+    @_RETRY
     async def create_edfi_instance_vendor(
         self, instance_id: str, request: CreateEdFiAdminVendorRequest
     ) -> EdFiAdminVendorCreatedResponse:

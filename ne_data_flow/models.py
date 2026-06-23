@@ -53,6 +53,8 @@ class SyncState(State):
 
 
 class EsuSyncState(State):
+    placeholder_lea_id: str | None = None
+    placeholder_lea_education_organization_id: int | None = None
     esu_application_id: int | None = None
     esu_sync_credentials: ApplicationCredentials | None = None
     source_connection_id: str | None = None
