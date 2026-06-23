@@ -15,7 +15,7 @@ sync-from-sea = "ne_data_flow.sync_from_sea:main"
 [dependency-groups]
 dev = [
   "ruff>=0.9",
-  "ty>=0.0.0a1",
+  "ty>=0.0.52",
 ]
 
 [build-system]
